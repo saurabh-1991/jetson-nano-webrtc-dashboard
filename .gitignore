@@ -1,0 +1,33 @@
+.DS_Store
+*.pyc
+__pycache__/
+*.egg-info/
+.Python
+dist/
+build/
+*.egg
+.venv
+venv/
+env/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.env
+.env.local
+.env.*.local
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Backend
+backend/__pycache__/
+backend/*.log
+backend/.pytest_cache/
+backend/venv/
+
+# Docker
+.dockerignore

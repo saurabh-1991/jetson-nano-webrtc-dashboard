@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # Jetson Nano Backend
+  jetson-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: jetson-nano-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - API_DEBUG=False
+      - LOG_LEVEL=INFO
+    volumes:
+      - /dev:/dev
+      - ./backend:/app
+    privileged: true
+    restart: unless-stopped
+    networks:
+      - jetson-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # React Frontend
+  jetson-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: jetson-nano-frontend
+    ports:
+      - "5173:5173"
+      - "80:80"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - jetson-backend
+    restart: unless-stopped
+    networks:
+      - jetson-network
+
+networks:
+  jetson-network:
+    driver: bridge
