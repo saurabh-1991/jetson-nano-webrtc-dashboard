@@ -229,6 +229,7 @@ async def stream_mjpeg(request: Request):
 
                 success, frame = camera.get_frame()
                 if not success or frame is None:
+                    await asyncio.sleep(0.05)
                     continue
 
                 # Encode frame as JPEG

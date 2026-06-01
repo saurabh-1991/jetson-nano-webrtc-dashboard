@@ -311,6 +311,32 @@ gst-launch-1.0 v4l2src device=/dev/video0 ! videoconvert ! xvimagesink
 
 If you're deploying to Jetson Nano with JetPack 4.6 (L4T r32.7.1 / Python 3.6), use the provided Dockerfile `Dockerfile.jetpack46` and `requirements.jetpack46.txt`. This Dockerfile relies on system OpenCV / numpy packages from apt and installs a conservative set of Python packages suitable for Python 3.6.
 
+### Recommended: Native Jetson venv deployment (no container)
+
+Use JetPack-provided OpenCV/GStreamer libraries directly and install app Python deps in a venv.
+
+```bash
+cd backend
+chmod +x scripts/setup_jetpack46_native.sh
+./scripts/setup_jetpack46_native.sh
+
+source .venv-jp46/bin/activate
+
+# Camera source options:
+#   CAMERA_SOURCE=usb (default)
+#   CAMERA_SOURCE=csi
+export CAMERA_SOURCE=usb
+
+# Optional pipeline override:
+# export GST_PIPELINE_OVERRIDE='v4l2src device=/dev/video0 ! ... ! appsink drop=1 max-buffers=1 sync=false'
+
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Important native note:
+- Create venv with `--system-site-packages` (handled by setup script), otherwise apt-installed `cv2` may be invisible inside the venv.
+- Ensure `/dev/video0` is not occupied by another process/container while testing native mode.
+
 Build and run (on the Jetson Nano host):
 
 ```bash

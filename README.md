@@ -94,7 +94,18 @@ JetsonNano/POC_Project_1/
 #### Backend Setup
 ```bash
 cd backend
-pip3 install -r requirements.txt
+
+# JetPack 4.6 native path (recommended on Jetson)
+python3 -m venv --system-site-packages .venv-jp46
+source .venv-jp46/bin/activate
+pip3 install -r requirements.jetpack46.txt
+
+# (For non-JetPack/local modern Python, use requirements.txt instead)
+# pip3 install -r requirements.txt
+
+# Optional camera source switch: usb (default) | csi
+export CAMERA_SOURCE=usb
+
 python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 

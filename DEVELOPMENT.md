@@ -102,23 +102,38 @@ This section is the recommended path for deploying and testing on a real Jetson 
 ### 1. Prerequisites on Jetson
 
 - Jetson Nano flashed with JetPack 4.6
-- Docker and Docker Compose installed
-- NVIDIA container runtime available on Jetson
+- Python 3.6 and `python3-venv`
+- GStreamer + OpenCV packages from JetPack
 - Camera connected and visible under `/dev/video*`
+- Ensure no other app/container is holding the camera device (`/dev/video0`)
 
-### 2. Build backend image for JetPack 4.6
+### 2. Native backend setup (venv, no Docker)
 
-Use the JP4.6-specific Dockerfile:
+Run on Jetson host:
 
 ```bash
 cd backend
-docker build -f Dockerfile.jetpack46 -t jetson-nano-backend:jp46 .
+chmod +x scripts/setup_jetpack46_native.sh
+./scripts/setup_jetpack46_native.sh
 ```
 
-### 3. Run backend container with NVIDIA runtime
+### 3. Run backend natively with GStreamer pipeline
+
+Run on Jetson host:
 
 ```bash
-docker run --runtime nvidia --privileged -p 8000:8000 --device /dev:/dev jetson-nano-backend:jp46
+cd backend
+source .venv-jp46/bin/activate
+
+# Camera source options:
+#   CAMERA_SOURCE=usb (default, USB webcam)
+#   CAMERA_SOURCE=csi (CSI camera via nvarguscamerasrc)
+export CAMERA_SOURCE=usb
+
+# Optional custom pipeline override:
+# export GST_PIPELINE_OVERRIDE='v4l2src device=/dev/video0 ! ... ! appsink drop=1 max-buffers=1 sync=false'
+
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 ### 4. Validate backend health and JetPack runtime behavior
@@ -130,6 +145,9 @@ curl http://localhost:8000/health
 # Full status
 curl http://localhost:8000/api/system/status
 
+# CUDA diagnostics
+curl http://localhost:8000/api/system/info
+
 # JP4.6 core mode behavior (expected 503 if aiortc is not installed)
 curl -X POST http://localhost:8000/api/webrtc/offer \
   -H "Content-Type: application/json" \
@@ -139,6 +157,7 @@ curl -X POST http://localhost:8000/api/webrtc/offer \
 Expected behavior in JP4.6 core profile:
 
 - `/health` and `/api/system/status` return success.
+- `/api/system/info` typically indicates CUDA diagnostics (`reason` field explains fallback state).
 - `/api/webrtc/offer` may return `503` when WebRTC dependencies are unavailable.
 - Frontend should then use MJPEG fallback stream (`/api/camera/stream`).
 
@@ -169,21 +188,44 @@ npm run dev
 
 ### 7. Verify NVIDIA acceleration inside container
 
+### 7. Verify JetPack-native acceleration on host
+
 ```bash
-# Confirm NVIDIA runtime in container config
+# Verify NVIDIA GStreamer plugins
+gst-inspect-1.0 nvvidconv
+gst-inspect-1.0 nvjpegdec
+
+# Verify OpenCV runtime capabilities
+python3 - <<'PY'
+import cv2
+print('opencv', cv2.__version__)
+print('has cv2.cuda:', hasattr(cv2, 'cuda'))
+if hasattr(cv2, 'cuda'):
+  print('cuda device count:', cv2.cuda.getCudaEnabledDeviceCount())
+print('has cv2.cuda_GpuMat:', hasattr(cv2, 'cuda_GpuMat'))
+print('has cv2.cuda.GpuMat:', hasattr(cv2.cuda, 'GpuMat') if hasattr(cv2, 'cuda') else False)
+PY
+
+# Monitor GPU utilization while streaming
+tegrastats
+```
+
+### Optional: container path (if needed)
+
+```bash
+cd backend
+docker build -f Dockerfile.jetpack46 -t jetson-nano-backend:jp46 .
+docker run --runtime nvidia --privileged -p 8000:8000 --device /dev:/dev jetson-nano-backend:jp46
+
+# Verify container runtime/plugins
 docker inspect jetson-nano-backend --format '{{json .HostConfig.Runtime}}'
-
-# Check NVIDIA plugin availability
 docker exec -it jetson-nano-backend bash -lc "gst-inspect-1.0 nvvidconv && gst-inspect-1.0 nvjpegdec"
-
-# Check OpenCV CUDA visibility
-docker exec -it jetson-nano-backend bash -lc "python3 -c 'import cv2; print(cv2.cuda.getCudaEnabledDeviceCount())'"
 ```
 
 Notes:
 
 - Hardware-accelerated GStreamer elements (`nvjpegdec`, `nvvidconv`) should be present.
-- OpenCV CUDA device count can still be `0` if that OpenCV build lacks CUDA support.
+- OpenCV CUDA device count can still be `0` if that build lacks usable CUDA runtime/device support.
 - MJPEG encoding path is primarily CPU-based even when parts of the pipeline are hardware accelerated.
 
 ## Debugging
