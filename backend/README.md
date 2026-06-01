@@ -6,12 +6,13 @@ FastAPI backend for real-time video streaming, GPIO control, and device monitori
 
 This backend provides:
 
-- WebRTC streaming from the Jetson Nano camera
+- WebRTC streaming from the Jetson Nano camera (when `aiortc` stack is available)
 - MJPEG fallback camera streaming
 - GPIO REST API for LED control
 - WebSocket real-time status updates
 - System and application status endpoints
 - CUDA-aware OpenCV processing
+- JetPack 4.6 (Python 3.6) compatibility profile
 
 It is designed to support the dashboard frontend at `frontend/` via `/api/*` endpoints.
 
@@ -35,7 +36,7 @@ React Frontend Dashboard
 
 ## Features
 
-- **Real-time Video Streaming** via WebRTC
+- **Real-time Video Streaming** via WebRTC (optional on JP4.6 profile)
 - **MJPEG fallback stream** for browser compatibility or lower complexity
 - **GPIO control** for LED on/off/toggle via REST
 - **System status APIs** for camera, CUDA, GPIO, and WebSocket status
@@ -66,7 +67,7 @@ backend/
 ### Prerequisites
 
 - Jetson Nano with JetPack installed
-- Python 3.8+ or compatible
+- Python 3.8+ for default profile, or Python 3.6 for `requirements.jetpack46.txt`
 - CUDA and cuDNN installed for GPU acceleration
 - GStreamer 1.0 and plugins
 
@@ -90,6 +91,13 @@ sudo apt install -y \
 ```bash
 cd backend
 pip3 install -r requirements.txt
+```
+
+For JetPack 4.6 / Python 3.6 profile:
+
+```bash
+cd backend
+pip3 install -r requirements.jetpack46.txt
 ```
 
 ## Configuration
@@ -160,6 +168,7 @@ docker run --privileged -p 8000:8000 jetson-nano-backend
 ### WebRTC
 
 - `POST /api/webrtc/offer` — accept browser SDP offer and return SDP answer
+  - On JP4.6 compatibility profile (without `aiortc`), this endpoint returns `503` and frontend should fallback to `GET /api/camera/stream`.
 
 ### WebSocket
 
@@ -296,6 +305,7 @@ gst-inspect-1.0 | grep nv
 ```bash
 ls /dev/video*
 gst-launch-1.0 v4l2src device=/dev/video0 ! videoconvert ! xvimagesink
+```
 
 ## JetPack 4.6 (Jetson Nano) build using Dockerfile.jetpack46
 
@@ -306,13 +316,34 @@ Build and run (on the Jetson Nano host):
 ```bash
 cd backend
 docker build -f Dockerfile.jetpack46 -t jetson-nano-backend:jp46 .
-docker run --privileged -p 8000:8000 --device /dev:/dev jetson-nano-backend:jp46
+docker run --runtime nvidia --privileged -p 8000:8000 --device /dev:/dev jetson-nano-backend:jp46
 ```
+
+### Verify NVIDIA acceleration inside container (Jetson host)
+
+After starting the container, validate runtime and accelerated libraries:
+
+```bash
+# 1) Confirm NVIDIA runtime is active and env capabilities are present
+docker inspect jetson-nano-backend --format '{{json .HostConfig.Runtime}} {{json .Config.Env}}'
+
+# 2) Check Jetson release info inside container
+docker exec -it jetson-nano-backend bash -lc "cat /etc/nv_tegra_release"
+
+# 3) Verify NVIDIA GStreamer plugins are present
+docker exec -it jetson-nano-backend bash -lc "gst-inspect-1.0 nvvidconv && gst-inspect-1.0 nvjpegdec"
+
+# 4) Verify OpenCV CUDA visibility
+docker exec -it jetson-nano-backend bash -lc "python3 -c 'import cv2; print(cv2.cuda.getCudaEnabledDeviceCount())'"
+```
+
+If step (3) or (4) fails, the container will run but fallback to CPU/VIC paths depending on stage.
 
 Notes:
 - Do not install `opencv-python` / `numpy` from pip on the Jetson; use the system packages (`python3-opencv`, `python3-numpy`) provided by apt.
-- `aiortc` / `av` may need to be built on-device for ARM; iterate on `requirements.jetpack46.txt` and then pin working versions with `pip3 freeze`.
-```
+- On JetPack 4.6, the stock FFmpeg stack often conflicts with current `av`/`aiortc` builds. For reliable deployment, the JP4.6 profile runs with MJPEG + REST/WebSocket and treats WebRTC as optional.
+- In this mode, `POST /api/webrtc/offer` returns `503` with guidance to use `GET /api/camera/stream`.
+- If you maintain a custom FFmpeg toolchain and matching `av`/`aiortc`, you can add those packages back to `requirements.jetpack46.txt`.
 
 ### View logs
 
@@ -338,6 +369,9 @@ sudo usermod -a -G gpio $USER
 - Make sure JetPack and CUDA are installed and compatible with OpenCV
 - Run `tegrastats` to verify GPU activity
 - If CUDA fails, the backend falls back to CPU processing automatically
+- If `/api/system/info` reports `cuda_available: false`, check OpenCV build flags with:
+  - `python3 -c "import cv2; print('CUDA' in cv2.getBuildInformation()); print(cv2.getBuildInformation())"`
+- In containers, ensure GPU runtime is enabled (JetPack 4.x typically requires `--runtime nvidia`).
 
 ### WebRTC connection fails
 - Ensure the frontend and backend are on the same host or proxy setup
@@ -358,7 +392,31 @@ sudo usermod -a -G gpio $USER
 
 ### CUDA processing
 - Attempts GPU-accelerated resize with `cv2.cuda`
+- Performs one-time CUDA capability detection at startup to avoid per-frame CUDA probe overhead
 - Falls back to CPU resize if CUDA is unavailable or fails
+
+## CUDA / GPU Acceleration on Jetson Nano (Recommended Path)
+
+Yes — you can use Jetson GPU/CUDA cores to optimize this app. Practical guidance:
+
+1. **Use hardware capture/convert path (already configured):**
+  - The default `GST_PIPELINE` uses `nvjpegdec` + `nvvidconv`.
+2. **Use an OpenCV build with CUDA support:**
+  - If OpenCV is not CUDA-enabled, backend will run CPU fallback.
+3. **Run containers with NVIDIA runtime on JetPack 4.x:**
+  - Use `--runtime nvidia` and device access (`--device /dev:/dev` or explicit camera devices).
+4. **Tune frame size/FPS for Nano constraints:**
+  - Lower `CAMERA_WIDTH`, `CAMERA_HEIGHT`, and/or `CAMERA_FPS` when thermal or CPU bound.
+5. **Verify at runtime:**
+  - `GET /api/system/info` for CUDA device status.
+  - `tegrastats` for GR3D utilization while streaming.
+
+### Why CUDA may appear unused
+
+- OpenCV package in the running environment may not be compiled with CUDA.
+- Container may not have GPU runtime passthrough.
+- Pipeline may rely mostly on VIC/NVDEC acceleration rather than CUDA cores for some stages.
+- MJPEG encoding path (`cv2.imencode`) is CPU-oriented by design.
 
 ### WebRTC
 - Uses STUN servers for ICE negotiation
@@ -389,6 +447,13 @@ If you have a full stack compose file, run:
 docker-compose up -d
 ```
 
+For JetPack 4.6, ensure compose backend service includes:
+
+- `dockerfile: Dockerfile.jetpack46`
+- `runtime: nvidia`
+- `NVIDIA_VISIBLE_DEVICES=all`
+- `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`
+
 ## Resource Usage
 
 Typical Jetson Nano usage for a live stream:
@@ -402,11 +467,6 @@ Typical Jetson Nano usage for a live stream:
 - The backend uses the same `/api/*` base path expected by the React frontend.
 - If `Jetson.GPIO` is not installed, the backend will still run in mock GPIO mode.
 - `camera.py` tries a GStreamer capture pipeline first and falls back to `cv2.VideoCapture(0)`.
-- The frontend currently uses only the WebRTC `/api/webrtc/offer` path for live streaming, but the MJPEG and frame endpoints are available as alternatives.
+- Frontend supports WebRTC first, then automatically falls back to MJPEG when `/api/webrtc/offer` returns `503` or WebRTC setup fails.
+- Frontend backend target is configurable via `VITE_API_BASE_URL` (for example `http://192.168.1.20:8000` when testing against Jetson).
 - The backend is readiness-ready for Docker deployment, but hardware access requires `--privileged` mode on Jetson Nano.
-
-This starts:
-- FastAPI backend on port 8000
-- React frontend on port 80
-- Nginx reverse proxy
-- Full monitoring with health checks

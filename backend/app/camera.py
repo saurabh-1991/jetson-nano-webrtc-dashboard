@@ -15,8 +15,38 @@ class CameraCapture:
         self.cap = None
         self.is_open = False
         self.frame_count = 0
-        self.cuda_enabled = CUDA_ENABLED
+        self.cuda_enabled = False
+        self.cuda_available = False
+        self.cuda_device_count = 0
+        self._detect_cuda_capability()
         self._initialize_camera()
+
+    def _detect_cuda_capability(self):
+        """Detect CUDA support at startup and set runtime flags."""
+        if not CUDA_ENABLED:
+            logger.info("CUDA processing disabled by configuration")
+            self.cuda_enabled = False
+            self.cuda_available = False
+            self.cuda_device_count = 0
+            return
+
+        try:
+            count = int(cv2.cuda.getCudaEnabledDeviceCount())
+            self.cuda_device_count = count
+            self.cuda_available = count > 0
+            self.cuda_enabled = self.cuda_available
+
+            if self.cuda_available:
+                logger.info(f"CUDA enabled with {count} device(s)")
+            else:
+                logger.warning(
+                    "CUDA requested but OpenCV reports zero CUDA devices; using CPU fallback"
+                )
+        except Exception as e:
+            logger.warning(f"OpenCV CUDA runtime unavailable: {e}; using CPU fallback")
+            self.cuda_enabled = False
+            self.cuda_available = False
+            self.cuda_device_count = 0
 
     def _initialize_camera(self):
         """Initialize camera capture"""
@@ -64,9 +94,11 @@ class CameraCapture:
                     return True, processed
                 except Exception as e:
                     logger.warning(f"CUDA processing failed: {e}, using CPU")
-                    return True, frame
+                    self.cuda_enabled = False
+                    self.cuda_available = False
+                    return True, self._process_with_cpu(frame)
             else:
-                return True, frame
+                return True, self._process_with_cpu(frame)
 
         except Exception as e:
             logger.error(f"Error getting frame: {e}")
@@ -96,8 +128,14 @@ class CameraCapture:
             return processed
         except Exception as e:
             logger.warning(f"CUDA processing error: {e}")
-            # Fallback to CPU resize
-            return cv2.resize(frame, PROCESSING_SCALE)
+            # Fallback to CPU resize and disable further CUDA attempts for this runtime.
+            self.cuda_enabled = False
+            self.cuda_available = False
+            return self._process_with_cpu(frame)
+
+    def _process_with_cpu(self, frame) -> np.ndarray:
+        """CPU frame processing fallback path."""
+        return cv2.resize(frame, PROCESSING_SCALE)
 
     def get_frame_count(self) -> int:
         """Get total frames captured"""

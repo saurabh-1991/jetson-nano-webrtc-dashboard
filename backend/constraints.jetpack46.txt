@@ -1,0 +1,7 @@
+# Build-time constraints for JetPack 4.6 / Python 3.6
+# Keep Cython on 0.29.x so av==9.x can compile on Python 3.6.
+Cython<3
+
+# Keep packaging toolchain in Python 3.6-compatible range.
+setuptools<60
+wheel<0.38

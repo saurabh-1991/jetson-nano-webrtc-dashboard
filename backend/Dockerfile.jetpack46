@@ -1,12 +1,29 @@
 # Dockerfile tailored for JetPack 4.6 / Jetson Nano (L4T r32.7.1)
 FROM nvcr.io/nvidia/l4t-base:r32.7.1
 
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
 # Install system dependencies including Jetson's OpenCV and numpy
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     python3-dev \
     python3-opencv \
     python3-numpy \
+    ffmpeg \
+    libavcodec-dev \
+    libavformat-dev \
+    libavdevice-dev \
+    libavutil-dev \
+    libavfilter-dev \
+    libswscale-dev \
+    libswresample-dev \
+    libopus-dev \
+    libsrtp2-dev \
+    libvpx-dev \
+    build-essential \
     gstreamer1.0-tools \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
@@ -22,9 +39,13 @@ RUN apt-get update && apt-get install -y \
 # Upgrade pip to a reasonably recent version that works on Python 3.6
 RUN pip3 install --upgrade "pip<23" "setuptools<60"
 
+# Build tools pinned for Python 3.6 / av build compatibility
+COPY constraints.jetpack46.txt /app/constraints.jetpack46.txt
+RUN pip3 install -c /app/constraints.jetpack46.txt "wheel<0.38" "Cython<3"
+
 # Copy JetPack-specific requirements (do not include opencv-python / numpy)
 COPY requirements.jetpack46.txt /app/requirements.jetpack46.txt
-RUN pip3 install -r /app/requirements.jetpack46.txt
+RUN pip3 install -c /app/constraints.jetpack46.txt --no-build-isolation -r /app/requirements.jetpack46.txt
 
 # Copy application code
 COPY app /app/app

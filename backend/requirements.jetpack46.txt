@@ -3,11 +3,15 @@
 # - Jetson's system packages provide OpenCV and Numpy; do NOT install opencv-python or numpy from pip on the device.
 # - aiortc/av often require building on-device for ARM; adjust pins after you find working versions.
 fastapi==0.70.0
-uvicorn==0.17.6
+# Keep uvicorn on a Python 3.6-compatible release (0.17+ uses asyncio.run).
+uvicorn==0.16.0
 python-multipart==0.0.5
 pydantic==1.8.2
-aiortc==1.4.0
-av==8.0.3
+
+# NOTE: WebRTC dependencies are intentionally excluded for JetPack 4.6 core deployment
+# because av/aiortc compilation is incompatible with the stock FFmpeg stack on many JP4.6 images.
+# The backend runs with MJPEG streaming and REST/WebSocket APIs without these packages.
+# If you build custom FFmpeg and a compatible av/aiortc stack, add them back here.
 
 # After you have verified working package versions on the Jetson Nano, pin exact working versions:
 #   pip3 freeze > requirements.jetpack46.lock.txt

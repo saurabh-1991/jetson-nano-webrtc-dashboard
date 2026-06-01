@@ -17,12 +17,27 @@ from .camera import get_camera, check_cuda_availability
 from . import camera as camera_module
 from .gpio_control import get_gpio_controller
 from . import gpio_control as gpio_module
-from .webrtc import get_webrtc_manager
 from .websocket import (
     handle_websocket_connection,
     get_device_status,
     broadcast_device_status
 )
+
+
+def is_webrtc_available() -> bool:
+    """Check whether WebRTC dependencies are available at runtime."""
+    try:
+        import aiortc  # noqa: F401
+        from .webrtc import get_webrtc_manager as _get_webrtc_manager  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def get_webrtc_manager_safe():
+    """Lazy import WebRTC manager to avoid hard startup dependency."""
+    from .webrtc import get_webrtc_manager
+    return get_webrtc_manager()
 
 # Configure logging
 logging.basicConfig(
@@ -79,7 +94,7 @@ app = FastAPI(
 async def on_startup():
     global status_broadcast_task
     logger.info("Starting Jetson Nano Dashboard backend")
-    status_broadcast_task = asyncio.create_task(broadcast_device_status())
+    status_broadcast_task = asyncio.ensure_future(broadcast_device_status())
 
 
 @app.on_event("shutdown")
@@ -283,11 +298,17 @@ async def gpio_toggle():
 @app.post("/api/webrtc/offer")
 async def webrtc_offer(request: dict):
     """Handle WebRTC offer"""
+    if not is_webrtc_available():
+        raise HTTPException(
+            status_code=503,
+            detail="WebRTC is unavailable on this target build. Use /api/camera/stream (MJPEG) instead."
+        )
+
     try:
         from aiortc import RTCSessionDescription
-        from .webrtc import get_webrtc_manager, CameraVideoTrack
+        from .webrtc import CameraVideoTrack
         
-        manager = get_webrtc_manager()
+        manager = get_webrtc_manager_safe()
         pc = manager.create_peer_connection()
         
         # Handle the offer
@@ -328,11 +349,17 @@ async def websocket_endpoint(websocket: WebSocket):
 async def get_stats():
     """Get application statistics"""
     camera = get_camera()
-    webrtc_mgr = get_webrtc_manager()
+    webrtc_connections = 0
+    if is_webrtc_available():
+        try:
+            webrtc_mgr = get_webrtc_manager_safe()
+            webrtc_connections = webrtc_mgr.get_connection_count()
+        except Exception:
+            webrtc_connections = 0
     
     return {
         "camera_frames": camera.get_frame_count(),
-        "webrtc_connections": webrtc_mgr.get_connection_count(),
+        "webrtc_connections": webrtc_connections,
         "timestamp": datetime.now().isoformat()
     }
 
