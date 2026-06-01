@@ -121,6 +121,25 @@
   font-weight: 500;
 }
 
+.stream-mode {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #0d6efd;
+  background: #e7f1ff;
+  border: 1px solid #cfe2ff;
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+}
+
+.fallback-notice {
+  padding: 0.75rem;
+  background: #fff3cd;
+  border: 1px solid #ffe69c;
+  border-radius: 4px;
+  color: #664d03;
+  font-size: 0.9rem;
+}
+
 .error-message {
   padding: 1rem;
   background: #f8d7da;

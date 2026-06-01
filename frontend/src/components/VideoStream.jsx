@@ -3,22 +3,59 @@ import './VideoStream.css'
 
 export const VideoStream = ({ apiBaseUrl = '' }) => {
   const videoRef = useRef(null)
+  const imgRef = useRef(null)
   const [isConnecting, setIsConnecting] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
   const [connectionState, setConnectionState] = useState('disconnected')
   const [error, setError] = useState(null)
+  const [notice, setNotice] = useState(null)
+  const [streamMode, setStreamMode] = useState('none') // none | webrtc | mjpeg
+  const [mjpegUrl, setMjpegUrl] = useState('')
   const pcRef = useRef(null)
 
-  const connectWebRTC = async () => {
-    if (isConnected || isConnecting) return
+  const getBaseUrl = () => apiBaseUrl || (
+    import.meta.env.VITE_API_BASE_URL
+    || (import.meta.env.DEV ? 'http://localhost:8000' : '')
+  )
+
+  const closePeerConnection = () => {
+    if (pcRef.current) {
+      pcRef.current.close()
+      pcRef.current = null
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
+    }
+  }
+
+  const startMJPEGFallback = (baseUrl, reason) => {
+    closePeerConnection()
+
+    setNotice(reason || 'Using MJPEG fallback stream')
+    setStreamMode('mjpeg')
+    setConnectionState('connecting')
+    setIsConnecting(true)
+    setIsConnected(false)
+    setError(null)
+
+    // timestamp prevents stale browser cache
+    setMjpegUrl(`${baseUrl}/api/camera/stream?t=${Date.now()}`)
+  }
+
+  const connectStream = async () => {
+    if (isConnected || isConnecting) {
+      return
+    }
 
     setIsConnecting(true)
     setError(null)
+    setNotice(null)
+
+    const baseUrl = getBaseUrl()
+    let usedMjpegFallback = false
 
     try {
-      const baseUrl = apiBaseUrl || (
-        process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : ''
-      )
+      setStreamMode('webrtc')
 
       // Create peer connection
       const config = {
@@ -39,6 +76,9 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
         if (event.streams && event.streams[0] && videoRef.current) {
           videoRef.current.srcObject = event.streams[0]
           setIsConnected(true)
+          setIsConnecting(false)
+          setStreamMode('webrtc')
+          setNotice(null)
         }
       }
 
@@ -66,6 +106,14 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
       })
 
       if (!response.ok) {
+        if (response.status === 503) {
+          usedMjpegFallback = true
+          startMJPEGFallback(
+            baseUrl,
+            'WebRTC unavailable on Jetson build. Switched to MJPEG streaming.'
+          )
+          return
+        }
         throw new Error(`Server returned ${response.status}`)
       }
 
@@ -76,28 +124,44 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
       setConnectionState('connected')
     } catch (err) {
       console.error('WebRTC connection error:', err)
-      setError(err.message)
-      setIsConnected(false)
-      setConnectionState('failed')
-      if (pcRef.current) {
-        pcRef.current.close()
-        pcRef.current = null
-      }
+
+      // Auto-fallback to MJPEG for runtime streaming continuity
+      const fallbackReason = `WebRTC failed (${err.message || 'unknown error'}). Switched to MJPEG.`
+      usedMjpegFallback = true
+      startMJPEGFallback(baseUrl, fallbackReason)
     } finally {
-      setIsConnecting(false)
+      // For MJPEG fallback, keep connecting state until the image stream loads.
+      if (!usedMjpegFallback) {
+        setIsConnecting(false)
+      }
     }
   }
 
   const disconnect = () => {
-    if (pcRef.current) {
-      pcRef.current.close()
-      pcRef.current = null
+    closePeerConnection()
+    if (imgRef.current) {
+      imgRef.current.src = ''
     }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null
-    }
+    setMjpegUrl('')
+    setStreamMode('none')
+    setNotice(null)
+    setError(null)
+    setIsConnecting(false)
     setIsConnected(false)
     setConnectionState('disconnected')
+  }
+
+  const onMjpegLoaded = () => {
+    setIsConnected(true)
+    setIsConnecting(false)
+    setConnectionState('connected')
+  }
+
+  const onMjpegError = () => {
+    setIsConnected(false)
+    setIsConnecting(false)
+    setConnectionState('failed')
+    setError('Failed to load MJPEG stream from backend')
   }
 
   useEffect(() => {
@@ -109,21 +173,43 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
   return (
     <div className="video-stream-container">
       <div className="video-wrapper">
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          className="video-element"
-          style={{
-            width: '100%',
-            height: '100%',
-            backgroundColor: '#000',
-            borderRadius: '8px'
-          }}
-        />
+        {streamMode === 'mjpeg' ? (
+          <img
+            ref={imgRef}
+            src={mjpegUrl}
+            alt="MJPEG Stream"
+            className="video-element"
+            onLoad={onMjpegLoaded}
+            onError={onMjpegError}
+            style={{
+              width: '100%',
+              height: '100%',
+              backgroundColor: '#000',
+              borderRadius: '8px'
+            }}
+          />
+        ) : (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            className="video-element"
+            style={{
+              width: '100%',
+              height: '100%',
+              backgroundColor: '#000',
+              borderRadius: '8px'
+            }}
+          />
+        )}
+
         {!isConnected && (
           <div className="video-placeholder">
-            {isConnecting ? 'Connecting...' : 'Click "Start Stream" to begin'}
+            {isConnecting
+              ? streamMode === 'mjpeg'
+                ? 'Loading MJPEG stream...'
+                : 'Connecting WebRTC...'
+              : 'Click "Start Stream" to begin'}
           </div>
         )}
       </div>
@@ -131,7 +217,7 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
       <div className="video-controls">
         {!isConnected ? (
           <button
-            onClick={connectWebRTC}
+            onClick={connectStream}
             disabled={isConnecting}
             className="btn btn-primary"
           >
@@ -152,7 +238,16 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
         <span className="status-text">
           {connectionState.charAt(0).toUpperCase() + connectionState.slice(1)}
         </span>
+        {streamMode !== 'none' && (
+          <span className="stream-mode">
+            Mode: {streamMode.toUpperCase()}
+          </span>
+        )}
       </div>
+
+      {notice && (
+        <div className="fallback-notice">{notice}</div>
+      )}
 
       {error && (
         <div className="error-message">

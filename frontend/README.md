@@ -6,7 +6,7 @@ React-based web dashboard for real-time video streaming and GPIO control on Jets
 
 This frontend is built with React + Vite and provides a simple dashboard for:
 
-- real-time camera streaming via WebRTC
+- real-time camera streaming via WebRTC with automatic MJPEG fallback
 - GPIO LED control
 - device health/status monitoring
 - backend API integration with FastAPI
@@ -48,7 +48,22 @@ frontend/
 ### Prerequisites
 
 - Node.js 18+ / npm
-- Backend running at `http://localhost:8000` for local development
+- Backend running and reachable (default local: `http://localhost:8000`)
+
+## Environment Configuration
+
+The frontend reads backend base URL from `VITE_API_BASE_URL`.
+
+- File: `frontend/.env`
+- Example values:
+  - Local backend: `VITE_API_BASE_URL=http://localhost:8000`
+  - Jetson backend: `VITE_API_BASE_URL=http://192.168.1.20:8000`
+
+If `VITE_API_BASE_URL` is not set, development mode defaults to `http://localhost:8000`.
+
+If you use Docker Compose, set frontend environment to:
+
+- `VITE_API_BASE_URL=http://localhost:8000` (or Jetson backend IP)
 
 ### Install dependencies
 
@@ -127,7 +142,8 @@ Global styling for the dashboard layout, spacing, typography, and responsive pag
 Axios-based API client.
 
 - Creates a base Axios instance
-- Uses `http://localhost:8000/api` in development
+- Uses `VITE_API_BASE_URL` for backend targeting
+- Falls back to `http://localhost:8000/api` in development if env var is not set
 - Defines grouped endpoint helpers:
   - `cameraAPI` for camera-related endpoints
   - `gpioAPI` for GPIO control
@@ -154,9 +170,10 @@ Live video component.
 - Creates a WebRTC peer connection
 - Sends an SDP offer to backend endpoint `/api/webrtc/offer`
 - Receives backend SDP answer and sets remote description
-- Displays remote stream in a `<video>` element
+- If WebRTC is unavailable/fails (for example backend returns `503`), automatically falls back to MJPEG stream (`/api/camera/stream`)
+- Displays remote stream in a `<video>` element (WebRTC) or `<img>` element (MJPEG)
 - Shows connect/disconnect buttons
-- Displays connection state and errors
+- Displays connection state, active stream mode (`WEBRTC`/`MJPEG`), notices, and errors
 
 ### `src/components/GPIOControls.jsx`
 
@@ -201,21 +218,24 @@ The frontend communicates with the FastAPI backend through these endpoints:
 - `POST /api/gpio/toggle` — toggle LED state
 - `GET /api/system/status` — device status payload
 - `POST /api/webrtc/offer` — exchange WebRTC offer/answer
+- `GET /api/camera/stream` — MJPEG fallback live stream
 
 ## Testing checklist
 
-1. Start backend service on `localhost:8000`
-2. Start frontend with `npm run dev`
-3. Visit `http://localhost:5173`
-4. In the dashboard:
-   - click `Start Stream` and verify video appears
-   - verify LED status loads
-   - use `LED ON`, `LED OFF`, and `TOGGLE`
-   - confirm device status cards update every 5 seconds
-5. Check browser console for WebRTC or network errors
+1. Configure backend URL in `frontend/.env` (`VITE_API_BASE_URL=...`)
+2. Start backend service
+3. Start frontend with `npm run dev`
+4. Visit `http://localhost:5173`
+5. In the dashboard:
+  - click `Start Stream` and verify video appears
+  - if backend WebRTC endpoint returns `503`, verify frontend switches to **Mode: MJPEG** and stream still renders
+  - verify LED status loads
+  - use `LED ON`, `LED OFF`, and `TOGGLE`
+  - confirm device status cards update every 5 seconds
+6. Check browser console for WebRTC or network errors
 
 ## Notes
 
-- The frontend is designed for local development with the API server on `localhost:8000`.
+- The frontend supports configurable backend targeting via `VITE_API_BASE_URL`.
 - If you deploy behind a reverse proxy, ensure API requests are forwarded to `/api`.
-- The WebRTC component requires the backend to provide a valid SDP answer and media stream.
+- WebRTC is attempted first; on failure, the UI automatically falls back to MJPEG streaming.
