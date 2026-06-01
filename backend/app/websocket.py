@@ -5,7 +5,8 @@ import json
 import asyncio
 from typing import Set, Dict
 from fastapi import WebSocket, WebSocketDisconnect
-from .camera import get_camera, check_cuda_availability
+from .camera import check_cuda_availability
+from . import camera as camera_module
 from .gpio_control import get_gpio_controller
 
 logger = logging.getLogger(__name__)
@@ -139,14 +140,14 @@ async def process_websocket_message(websocket: WebSocket, message: dict):
 
 def get_device_status() -> dict:
     """Get current device status"""
-    camera = get_camera()
+    camera = getattr(camera_module, "camera", None)
     gpio = get_gpio_controller()
     cuda_info = check_cuda_availability()
     
     return {
         "camera": {
-            "is_open": camera.is_open,
-            "frame_count": camera.get_frame_count()
+            "is_open": camera.is_open if camera else False,
+            "frame_count": camera.get_frame_count() if camera else 0
         },
         "gpio": gpio.get_led_state(),
         "cuda": cuda_info,

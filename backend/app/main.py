@@ -7,7 +7,7 @@ import signal
 import sys
 from datetime import datetime
 from typing import List
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
@@ -48,6 +48,8 @@ logger = logging.getLogger(__name__)
 
 # Status tracking
 status_broadcast_task = None
+active_mjpeg_clients = 0
+active_mjpeg_lock = asyncio.Lock()
 
 
 def cleanup_resources():
@@ -139,12 +141,13 @@ async def root():
 @app.get("/health")
 async def health():
     """Detailed health check"""
-    camera = get_camera()
+    camera = getattr(camera_module, "camera", None)
+
     return {
         "status": "healthy",
         "camera": {
-            "is_open": camera.is_open,
-            "frame_count": camera.get_frame_count()
+            "is_open": camera.is_open if camera else False,
+            "frame_count": camera.get_frame_count() if camera else 0
         },
         "timestamp": datetime.now().isoformat()
     }
@@ -176,11 +179,12 @@ async def system_status():
 @app.get("/api/camera/info")
 async def camera_info():
     """Get camera information"""
-    camera = get_camera()
+    camera = getattr(camera_module, "camera", None)
+
     return {
-        "is_open": camera.is_open,
-        "frame_count": camera.get_frame_count(),
-        "cuda_enabled": camera.cuda_enabled,
+        "is_open": camera.is_open if camera else False,
+        "frame_count": camera.get_frame_count() if camera else 0,
+        "cuda_enabled": camera.cuda_enabled if camera else False,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -206,13 +210,23 @@ async def get_frame():
 
 
 @app.get("/api/camera/stream")
-async def stream_mjpeg():
+async def stream_mjpeg(request: Request):
     """Stream video as MJPEG (fallback for low-latency needs)"""
     async def generate():
+        global active_mjpeg_clients
+
         camera = get_camera()
+
+        async with active_mjpeg_lock:
+            active_mjpeg_clients += 1
+            logger.info(f"MJPEG client connected. Active clients: {active_mjpeg_clients}")
         
-        while True:
-            try:
+        try:
+            while True:
+                if await request.is_disconnected():
+                    logger.info("MJPEG client disconnected")
+                    break
+
                 success, frame = camera.get_frame()
                 if not success or frame is None:
                     continue
@@ -232,9 +246,33 @@ async def stream_mjpeg():
                 # Small delay to limit frame rate
                 await asyncio.sleep(0.033)  # ~30 FPS
 
+        except asyncio.CancelledError:
+            logger.info("MJPEG stream cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error in MJPEG stream: {e}")
+        finally:
+            async with active_mjpeg_lock:
+                active_mjpeg_clients = max(0, active_mjpeg_clients - 1)
+                remaining_mjpeg_clients = active_mjpeg_clients
+
+            # Release camera when no active MJPEG clients and no active WebRTC clients.
+            try:
+                webrtc_connections = 0
+                if is_webrtc_available():
+                    try:
+                        webrtc_mgr = get_webrtc_manager_safe()
+                        webrtc_connections = webrtc_mgr.get_connection_count()
+                    except Exception:
+                        webrtc_connections = 0
+
+                if remaining_mjpeg_clients == 0 and webrtc_connections == 0:
+                    if getattr(camera_module, "camera", None) is not None:
+                        camera_module.camera.release()
+                        camera_module.camera = None
+                        logger.info("Released camera after last stream client disconnected")
             except Exception as e:
-                logger.error(f"Error in MJPEG stream: {e}")
-                break
+                logger.warning(f"Failed to release camera on stream disconnect: {e}")
 
     return StreamingResponse(
         generate(),
@@ -348,7 +386,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/api/stats")
 async def get_stats():
     """Get application statistics"""
-    camera = get_camera()
+    camera = getattr(camera_module, "camera", None)
     webrtc_connections = 0
     if is_webrtc_available():
         try:
@@ -358,7 +396,7 @@ async def get_stats():
             webrtc_connections = 0
     
     return {
-        "camera_frames": camera.get_frame_count(),
+            "camera_frames": camera.get_frame_count() if camera else 0,
         "webrtc_connections": webrtc_connections,
         "timestamp": datetime.now().isoformat()
     }
