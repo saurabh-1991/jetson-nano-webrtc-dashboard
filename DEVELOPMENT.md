@@ -95,6 +95,97 @@ docker-compose logs -f jetson-backend
 docker-compose logs -f jetson-frontend
 ```
 
+## Jetson Nano (JetPack 4.6) Deployment and Validation
+
+This section is the recommended path for deploying and testing on a real Jetson Nano running JetPack 4.6 (Python 3.6 / L4T r32.7.1).
+
+### 1. Prerequisites on Jetson
+
+- Jetson Nano flashed with JetPack 4.6
+- Docker and Docker Compose installed
+- NVIDIA container runtime available on Jetson
+- Camera connected and visible under `/dev/video*`
+
+### 2. Build backend image for JetPack 4.6
+
+Use the JP4.6-specific Dockerfile:
+
+```bash
+cd backend
+docker build -f Dockerfile.jetpack46 -t jetson-nano-backend:jp46 .
+```
+
+### 3. Run backend container with NVIDIA runtime
+
+```bash
+docker run --runtime nvidia --privileged -p 8000:8000 --device /dev:/dev jetson-nano-backend:jp46
+```
+
+### 4. Validate backend health and JetPack runtime behavior
+
+```bash
+# Basic health
+curl http://localhost:8000/health
+
+# Full status
+curl http://localhost:8000/api/system/status
+
+# JP4.6 core mode behavior (expected 503 if aiortc is not installed)
+curl -X POST http://localhost:8000/api/webrtc/offer \
+  -H "Content-Type: application/json" \
+  -d '{"sdp":"test","type":"offer"}'
+```
+
+Expected behavior in JP4.6 core profile:
+
+- `/health` and `/api/system/status` return success.
+- `/api/webrtc/offer` may return `503` when WebRTC dependencies are unavailable.
+- Frontend should then use MJPEG fallback stream (`/api/camera/stream`).
+
+### 5. Configure frontend to target Jetson backend
+
+In `frontend/.env`:
+
+```bash
+VITE_API_BASE_URL=http://<JETSON_IP>:8000
+```
+
+Then run frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### 6. Validate end-to-end UI behavior
+
+1. Open `http://localhost:5173`
+2. Click **Start Stream**
+3. Confirm one of the following:
+   - WebRTC connects successfully, or
+   - UI switches to **Mode: MJPEG** with fallback notice
+4. Validate GPIO controls and device status updates
+
+### 7. Verify NVIDIA acceleration inside container
+
+```bash
+# Confirm NVIDIA runtime in container config
+docker inspect jetson-nano-backend --format '{{json .HostConfig.Runtime}}'
+
+# Check NVIDIA plugin availability
+docker exec -it jetson-nano-backend bash -lc "gst-inspect-1.0 nvvidconv && gst-inspect-1.0 nvjpegdec"
+
+# Check OpenCV CUDA visibility
+docker exec -it jetson-nano-backend bash -lc "python3 -c 'import cv2; print(cv2.cuda.getCudaEnabledDeviceCount())'"
+```
+
+Notes:
+
+- Hardware-accelerated GStreamer elements (`nvjpegdec`, `nvvidconv`) should be present.
+- OpenCV CUDA device count can still be `0` if that OpenCV build lacks CUDA support.
+- MJPEG encoding path is primarily CPU-based even when parts of the pipeline are hardware accelerated.
+
 ## Debugging
 
 ### Backend Debugging
@@ -201,7 +292,7 @@ API_DEBUG=True
 LOG_LEVEL=DEBUG
 
 # Frontend
-VITE_API_URL=http://localhost:8000
+VITE_API_BASE_URL=http://localhost:8000
 VITE_WS_URL=ws://localhost:8000
 ```
 
@@ -243,7 +334,7 @@ services:
 
 - [ ] Backend starts without errors
 - [ ] Frontend loads in browser
-- [ ] WebRTC video connects
+- [ ] WebRTC video connects (or JP4.6 fallback to MJPEG is active)
 - [ ] LED on/off works
 - [ ] LED toggle works
 - [ ] Device status updates
