@@ -1,0 +1,13 @@
+# JetPack 4.6 (Python 3.6) compatibility requirements
+# Notes:
+# - Jetson's system packages provide OpenCV and Numpy; do NOT install opencv-python or numpy from pip on the device.
+# - aiortc/av often require building on-device for ARM; adjust pins after you find working versions.
+fastapi==0.70.0
+uvicorn==0.17.6
+python-multipart==0.0.5
+pydantic==1.8.2
+aiortc==1.4.0
+av==8.0.3
+
+# After you have verified working package versions on the Jetson Nano, pin exact working versions:
+#   pip3 freeze > requirements.jetpack46.lock.txt

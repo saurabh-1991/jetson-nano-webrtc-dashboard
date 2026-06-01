@@ -10,7 +10,6 @@ from typing import List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 import cv2
 
 from .config import API_DEBUG, LOG_LEVEL, LOG_FORMAT
@@ -34,33 +33,6 @@ logger = logging.getLogger(__name__)
 
 # Status tracking
 status_broadcast_task = None
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """FastAPI lifespan context manager"""
-    global status_broadcast_task
-    
-    # Startup
-    logger.info("Starting Jetson Nano Dashboard backend")
-    status_broadcast_task = asyncio.create_task(broadcast_device_status())
-    
-    yield
-    
-    # Shutdown
-    logger.info("Shutting down Jetson Nano Dashboard backend")
-    if status_broadcast_task:
-        status_broadcast_task.cancel()
-        try:
-            await status_broadcast_task
-        except asyncio.CancelledError:
-            pass
-    
-    # Clean up resources
-    if getattr(camera_module, 'camera', None) is not None:
-        camera_module.camera.release()
-    if getattr(gpio_module, 'gpio_controller', None) is not None:
-        gpio_module.gpio_controller.cleanup()
 
 
 def cleanup_resources():
@@ -99,9 +71,33 @@ for sig in (signal.SIGINT, signal.SIGTERM):
 app = FastAPI(
     title="Jetson Nano Dashboard API",
     description="Real-time video streaming and GPIO control",
-    version="1.0.0",
-    lifespan=lifespan
+    version="1.0.0"
 )
+
+# Startup and shutdown handlers (compatible with Python 3.6)
+@app.on_event("startup")
+async def on_startup():
+    global status_broadcast_task
+    logger.info("Starting Jetson Nano Dashboard backend")
+    status_broadcast_task = asyncio.create_task(broadcast_device_status())
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    global status_broadcast_task
+    logger.info("Shutting down Jetson Nano Dashboard backend")
+    if status_broadcast_task:
+        status_broadcast_task.cancel()
+        try:
+            await status_broadcast_task
+        except asyncio.CancelledError:
+            pass
+
+    # Clean up resources
+    if getattr(camera_module, 'camera', None) is not None:
+        camera_module.camera.release()
+    if getattr(gpio_module, 'gpio_controller', None) is not None:
+        gpio_module.gpio_controller.cleanup()
 
 # Add CORS middleware
 app.add_middleware(

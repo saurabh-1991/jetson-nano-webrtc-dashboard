@@ -296,6 +296,22 @@ gst-inspect-1.0 | grep nv
 ```bash
 ls /dev/video*
 gst-launch-1.0 v4l2src device=/dev/video0 ! videoconvert ! xvimagesink
+
+## JetPack 4.6 (Jetson Nano) build using Dockerfile.jetpack46
+
+If you're deploying to Jetson Nano with JetPack 4.6 (L4T r32.7.1 / Python 3.6), use the provided Dockerfile `Dockerfile.jetpack46` and `requirements.jetpack46.txt`. This Dockerfile relies on system OpenCV / numpy packages from apt and installs a conservative set of Python packages suitable for Python 3.6.
+
+Build and run (on the Jetson Nano host):
+
+```bash
+cd backend
+docker build -f Dockerfile.jetpack46 -t jetson-nano-backend:jp46 .
+docker run --privileged -p 8000:8000 --device /dev:/dev jetson-nano-backend:jp46
+```
+
+Notes:
+- Do not install `opencv-python` / `numpy` from pip on the Jetson; use the system packages (`python3-opencv`, `python3-numpy`) provided by apt.
+- `aiortc` / `av` may need to be built on-device for ARM; iterate on `requirements.jetpack46.txt` and then pin working versions with `pip3 freeze`.
 ```
 
 ### View logs
