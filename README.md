@@ -76,9 +76,14 @@ JetsonNano/POC_Project_1/
 │   └── README.md                # Frontend docs
 │
 ├── docker-compose.yml           # Multi-container setup
+├── DEPLOYMENT.md                # Deployment instructions
 └── Doc/
     └── jetson_nano_realtime_web_dashboard_architecture.md
 ```
+
+## 📘 Deployment Guide
+
+For detailed Jetson Nano deployment steps, including both Docker Compose and native installation, see `DEPLOYMENT.md`.
 
 ## 🚀 Quick Start
 
