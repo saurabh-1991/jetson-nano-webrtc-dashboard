@@ -130,6 +130,15 @@ source .venv-jp46/bin/activate
 #   CAMERA_SOURCE=csi (CSI camera via nvarguscamerasrc)
 export CAMERA_SOURCE=usb
 
+# Pipeline acceleration mode:
+#   CAMERA_ACCELERATION=auto      (default, hardware-first then compatibility fallback)
+#   CAMERA_ACCELERATION=hardware  (prefer hardware pipeline)
+#   CAMERA_ACCELERATION=compat    (prefer compatibility pipeline)
+export CAMERA_ACCELERATION=hardware
+
+# CSI camera sensor-id (used only when CAMERA_SOURCE=csi)
+export CAMERA_CSI_SENSOR_ID=0
+
 # Optional custom pipeline override:
 # export GST_PIPELINE_OVERRIDE='v4l2src device=/dev/video0 ! ... ! appsink drop=1 max-buffers=1 sync=false'
 
@@ -328,10 +337,10 @@ Create `.env` file in project root:
 
 ```bash
 # Backend
-JETSON_IP=192.168.1.100
-API_PORT=8000
-API_DEBUG=True
-LOG_LEVEL=DEBUG
+CAMERA_SOURCE=usb
+CAMERA_ACCELERATION=auto
+CAMERA_CSI_SENSOR_ID=0
+GST_PIPELINE_OVERRIDE=
 
 # Frontend
 VITE_API_BASE_URL=http://localhost:8000

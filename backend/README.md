@@ -108,7 +108,11 @@ Key settings:
 
 - `CAMERA_DEVICE` — e.g. `/dev/video0`
 - `CAMERA_WIDTH`, `CAMERA_HEIGHT`, `CAMERA_FPS`
-- `GST_PIPELINE` — GStreamer capture pipeline
+- `CAMERA_SOURCE` — `usb` or `csi`
+- `CAMERA_ACCELERATION` — `auto` (default, hardware-first), `hardware`, or `compat`
+- `CAMERA_USB_STARTUP_PROBE` — enable startup probing/reordering for USB candidates (`true`/`false`)
+- `CAMERA_CSI_SENSOR_ID` — CSI sensor index used by `nvarguscamerasrc`
+- `GST_PIPELINE_OVERRIDE` — full custom GStreamer capture pipeline override
 - `CUDA_ENABLED` — enable/disable CUDA processing
 - `PROCESSING_SCALE` — resize dimensions for frame processing
 - `GPIO_LED_PIN`, `GPIO_BUTTON_PIN`
@@ -154,7 +158,7 @@ docker run --privileged -p 8000:8000 jetson-nano-backend
 
 ### Camera
 
-- `GET /api/camera/info` — camera open state, frame count, CUDA status
+- `GET /api/camera/info` — camera open state, frame count, CUDA status, selected pipeline, and startup probe diagnostics
 - `GET /api/camera/frame` — single JPEG frame response
 - `GET /api/camera/stream` — MJPEG live stream fallback
 
@@ -327,6 +331,20 @@ source .venv-jp46/bin/activate
 #   CAMERA_SOURCE=csi
 export CAMERA_SOURCE=usb
 
+# Acceleration mode options:
+#   CAMERA_ACCELERATION=auto      (default, tries HW path first then compatibility fallback)
+#   CAMERA_ACCELERATION=hardware  (prefer HW path)
+#   CAMERA_ACCELERATION=compat    (prefer compatibility/CPU decode path)
+export CAMERA_ACCELERATION=hardware
+
+# USB startup probe (format-aware + quick performance check):
+#   true  => auto-reorder MJPEG/YUY2/UYVY candidates by measured startup speed
+#   false => use static fallback order from config
+export CAMERA_USB_STARTUP_PROBE=true
+
+# CSI sensor-id (applies when CAMERA_SOURCE=csi)
+export CAMERA_CSI_SENSOR_ID=0
+
 # Optional pipeline override:
 # export GST_PIPELINE_OVERRIDE='v4l2src device=/dev/video0 ! ... ! appsink drop=1 max-buffers=1 sync=false'
 
@@ -412,9 +430,21 @@ sudo usermod -a -G gpio $USER
 ## Performance Optimization
 
 ### GStreamer pipeline
-- Uses hardware JPEG decode via `nvjpegdec`
-- Converts frames using `nvvidconv`
-- Provides a low-latency capture path for the Jetson Nano
+- `CAMERA_ACCELERATION=auto` (default) tries hardware JPEG decode (`nvjpegdec`) + `nvvidconv` first.
+- If camera output is raw YUV, backend also tries NVIDIA-style hardware conversion paths:
+  - `v4l2src ... format=UYVY ! nvvidconv`
+  - `v4l2src ... format=YUY2 ! nvvidconv`
+- If the hardware pipeline fails for a specific USB camera, backend falls back to compatibility pipeline (`jpegdec`) to keep streaming alive.
+- For strict hardware preference, set `CAMERA_ACCELERATION=hardware`.
+- With `CAMERA_USB_STARTUP_PROBE=true`, backend performs a small startup probe:
+  - detects advertised USB formats via `v4l2-ctl --list-formats-ext` when available
+  - opens each candidate briefly and scores frame-read throughput
+  - reorders candidates so the fastest successful pipeline is tried first
+
+NVIDIA references used for this implementation:
+- Jetson Linux Developer Guide — *Accelerated GStreamer* (camera capture with `nvarguscamerasrc`, `v4l2src`, `nvvidconv`)
+- Jetson Linux Developer Guide — *Camera Software Development Solution* (API matrix and V4L2/ARGUS guidance)
+- Jetson Linux Developer Guide — *Hardware Acceleration in the WebRTC Framework* (H.264 HW encoding and YUY2→I420/NV12 conversion note)
 
 ### CUDA processing
 - Attempts GPU-accelerated resize with `cv2.cuda`

@@ -180,11 +180,15 @@ async def system_status():
 async def camera_info():
     """Get camera information"""
     camera = getattr(camera_module, "camera", None)
+    pipeline_info = camera.get_runtime_diagnostics() if camera else {}
 
     return {
         "is_open": camera.is_open if camera else False,
         "frame_count": camera.get_frame_count() if camera else 0,
         "cuda_enabled": camera.cuda_enabled if camera else False,
+        "selected_pipeline": pipeline_info.get("selected_pipeline"),
+        "selected_pipeline_mode": pipeline_info.get("selected_pipeline_mode"),
+        "pipeline_diagnostics": pipeline_info,
         "timestamp": datetime.now().isoformat()
     }
 

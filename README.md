@@ -106,6 +106,9 @@ pip3 install -r requirements.jetpack46.txt
 # Optional camera source switch: usb (default) | csi
 export CAMERA_SOURCE=usb
 
+# Pipeline mode: auto (default, HW-first), hardware (force HW-first), compat (CPU decode)
+export CAMERA_ACCELERATION=hardware
+
 python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -150,10 +153,17 @@ docker-compose up -d
 
 ### ✅ Performance Optimized
 - GStreamer hardware decoding (nvjpegdec)
+- NVIDIA raw-YUV hardware conversion (v4l2src + nvvidconv)
 - NVIDIA CUDA processing
 - GPU memory management
 - Async/await architecture
 - Frame dropping for latency
+
+### ✅ NVIDIA-Reference Pipeline Strategy
+- CSI path uses `nvarguscamerasrc` (ARGUS/ISP flow)
+- USB MJPEG path prefers `v4l2src ! jpegparse ! nvjpegdec ! nvvidconv`
+- USB raw-YUV path falls back to `v4l2src ! ... UYVY|YUY2 ... ! nvvidconv`
+- Compatibility mode retains software fallback (`jpegdec`/`videoconvert`)
 
 ## 🔌 API Endpoints
 
@@ -189,6 +199,9 @@ CAMERA_DEVICE = "/dev/video0"      # Camera device
 CAMERA_WIDTH = 1280                 # Resolution
 CAMERA_HEIGHT = 720
 CAMERA_FPS = 30
+CAMERA_SOURCE = "usb"               # usb | csi
+CAMERA_ACCELERATION = "auto"        # auto | hardware | compat
+CAMERA_CSI_SENSOR_ID = 0             # CSI sensor-id for nvarguscamerasrc
 
 GPIO_LED_PIN = 12                   # GPIO pin for LED
 STUN_SERVERS = [...]                # WebRTC STUN servers
