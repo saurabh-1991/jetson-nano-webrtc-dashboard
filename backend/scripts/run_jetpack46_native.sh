@@ -84,5 +84,8 @@ cleanup_video0_locks() {
 
 cleanup_video0_locks
 
+# Ensure Python imports resolve even when script is launched from backend/scripts.
+cd "${BACKEND_DIR}"
+
 echo "Starting backend on ${API_HOST}:${API_PORT} (CAMERA_SOURCE=${CAMERA_SOURCE})"
 exec python -m uvicorn app.main:app --host "${API_HOST}" --port "${API_PORT}"
