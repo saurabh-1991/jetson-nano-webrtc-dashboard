@@ -81,6 +81,14 @@ USB_GST_PIPELINE_COMPAT_RAW = (
     "appsink drop=1 max-buffers=1 sync=false"
 )
 
+# Most permissive USB fallback (avoid strict caps, let camera pick mode)
+USB_GST_PIPELINE_COMPAT_ANY = (
+    f"v4l2src device={CAMERA_DEVICE} ! "
+    "videoconvert ! "
+    "video/x-raw, format=BGR ! "
+    "appsink drop=1 max-buffers=1 sync=false"
+)
+
 CSI_GST_PIPELINE = (
     f"nvarguscamerasrc sensor-id={CAMERA_CSI_SENSOR_ID} ! "
     f"video/x-raw(memory:NVMM), width={CAMERA_WIDTH}, height={CAMERA_HEIGHT}, format=NV12, framerate={CAMERA_FPS}/1 ! "
@@ -107,7 +115,12 @@ GST_PIPELINE_IS_OVERRIDE = bool(GST_PIPELINE_OVERRIDE)
 GST_PIPELINE = GST_PIPELINE_OVERRIDE if GST_PIPELINE_IS_OVERRIDE else DEFAULT_GST_PIPELINE
 
 # CUDA Processing Configuration
-CUDA_ENABLED = True
+CUDA_ENABLED = os.getenv("CUDA_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 PROCESSING_SCALE = (640, 480)
 
 # GPIO Configuration

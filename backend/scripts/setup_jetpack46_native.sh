@@ -7,24 +7,43 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VENV_DIR="${BACKEND_DIR}/.venv-jp46"
+JP46_REQ_FILE="${BACKEND_DIR}/requirements.jetpack46.txt"
 
 echo "[1/4] Installing system dependencies (JetPack-native OpenCV/GStreamer)..."
 sudo apt-get update
-sudo apt-get install -y \
-  python3-pip \
-  python3-venv \
-  python3-dev \
-  python3-opencv \
-  python3-numpy \
-  gstreamer1.0-tools \
-  gstreamer1.0-plugins-base \
-  gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad \
-  gstreamer1.0-plugins-ugly \
-  gstreamer1.0-libav
+if [[ -f "${JP46_REQ_FILE}" ]]; then
+  mapfile -t APT_PACKAGES < <(
+    grep -E '^\s*#\s*apt:' "${JP46_REQ_FILE}" \
+      | sed -E 's/^\s*#\s*apt:\s*//' \
+      | sed '/^\s*$/d'
+  )
+  if [[ ${#APT_PACKAGES[@]} -gt 0 ]]; then
+    sudo apt-get install -y "${APT_PACKAGES[@]}"
+  fi
+else
+  sudo apt-get install -y \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    python3-opencv \
+    python3-numpy \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav
+fi
 
 echo "[2/4] Creating venv at ${VENV_DIR} with system-site-packages ..."
 # IMPORTANT: use system-site-packages to reuse JetPack's apt-installed cv2/numpy/gstreamer bindings.
+if [[ -f "${VENV_DIR}/pyvenv.cfg" ]]; then
+  if ! grep -qi '^include-system-site-packages = true' "${VENV_DIR}/pyvenv.cfg"; then
+    echo "Existing venv is not system-site-packages enabled. Recreating ${VENV_DIR} ..."
+    rm -rf "${VENV_DIR}"
+  fi
+fi
+
 python3 -m venv --system-site-packages "${VENV_DIR}"
 
 # shellcheck disable=SC1090

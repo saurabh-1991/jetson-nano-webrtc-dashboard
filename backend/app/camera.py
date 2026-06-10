@@ -1,6 +1,7 @@
 """Camera capture using GStreamer and OpenCV CUDA"""
 
 import logging
+import re
 import subprocess
 import time
 import cv2
@@ -18,6 +19,7 @@ from .config import (
     USB_GST_PIPELINE_RAW_HW_UYVY,
     USB_GST_PIPELINE_RAW_HW_YUY2,
     USB_GST_PIPELINE_COMPAT_RAW,
+    USB_GST_PIPELINE_COMPAT_ANY,
     PROCESSING_SCALE,
 )
 
@@ -44,8 +46,222 @@ class CameraCapture:
         self.startup_probe_scores = {}
         self.startup_probe_order = []
         self.last_camera_error = None
+        self.detected_usb_modes = {}
+        self.opencv_gstreamer_enabled = self._check_opencv_gstreamer_support()
         self._detect_cuda_capability()
         self._initialize_camera()
+
+    def _check_opencv_gstreamer_support(self) -> bool:
+        """Detect whether OpenCV build has GStreamer backend enabled."""
+        try:
+            info = cv2.getBuildInformation()
+            enabled = "gstreamer: yes" in info.lower()
+            if not enabled:
+                logger.warning(
+                    "OpenCV build reports GStreamer backend disabled; USB capture will use V4L2 fallback"
+                )
+            return enabled
+        except Exception as e:
+            logger.warning("Unable to read OpenCV build info (%s); assuming no GStreamer", e)
+            return False
+
+    def _build_usb_pipeline_mjpeg_compat(self, width: int, height: int, fps: int) -> str:
+        """Build a software-compatible MJPEG pipeline known to work with OpenCV appsink."""
+        return (
+            f"v4l2src device={CAMERA_DEVICE} ! "
+            f"image/jpeg,width={width},height={height},framerate={fps}/1 ! "
+            "jpegdec ! "
+            "videoconvert ! "
+            "video/x-raw, format=BGR ! "
+            "appsink drop=1 max-buffers=1 sync=false"
+        )
+
+    def _build_usb_pipeline_yuy2_compat(self, width: int, height: int, fps: int) -> str:
+        """Build a software-compatible YUY2 pipeline known to work with OpenCV appsink."""
+        return (
+            f"v4l2src device={CAMERA_DEVICE} ! "
+            f"video/x-raw,format=YUY2,width={width},height={height},framerate={fps}/1 ! "
+            "videoconvert ! "
+            "video/x-raw, format=BGR ! "
+            "appsink drop=1 max-buffers=1 sync=false"
+        )
+
+    def _pick_best_mode(self, modes, preferred_w, preferred_h, preferred_fps):
+        """Pick nearest advertised mode using a simple distance metric."""
+        if not modes:
+            return None
+
+        best = None
+        best_score = None
+
+        for mode in modes:
+            w, h, fps = mode
+            score = (
+                abs(w - preferred_w) * 1000
+                + abs(h - preferred_h) * 1000
+                + abs(fps - preferred_fps)
+            )
+            if best_score is None or score < best_score:
+                best = mode
+                best_score = score
+
+        return best
+
+    def _detect_usb_modes(self) -> dict:
+        """Parse v4l2-ctl mode list into {'mjpeg': [(w,h,fps)], 'yuy2': [(w,h,fps)]}."""
+        parsed = {"mjpeg": [], "yuy2": []}
+
+        try:
+            result = subprocess.run(
+                ["v4l2-ctl", "--device", CAMERA_DEVICE, "--list-formats-ext"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=3,
+                check=False,
+            )
+
+            if result.returncode != 0:
+                return parsed
+
+            current_format = None
+            current_size = None
+
+            for raw_line in (result.stdout or "").splitlines():
+                line = raw_line.strip()
+
+                if "Pixel Format:" in line:
+                    lower = line.lower()
+                    if "'mjpg'" in lower or "mjpeg" in lower:
+                        current_format = "mjpeg"
+                    elif "'yuyv'" in lower or "yuy2" in lower or "yuyv" in lower:
+                        current_format = "yuy2"
+                    else:
+                        current_format = None
+                    current_size = None
+                    continue
+
+                size_match = re.search(r"Size:\s*Discrete\s*(\d+)x(\d+)", line)
+                if size_match:
+                    current_size = (int(size_match.group(1)), int(size_match.group(2)))
+                    continue
+
+                fps_match = re.search(r"\((\d+(?:\.\d+)?)\s*fps\)", line)
+                if fps_match and current_format and current_size:
+                    fps = int(float(fps_match.group(1)))
+                    parsed[current_format].append((current_size[0], current_size[1], fps))
+
+            # Deduplicate while preserving order
+            for key in parsed:
+                seen = set()
+                uniq = []
+                for mode in parsed[key]:
+                    if mode not in seen:
+                        uniq.append(mode)
+                        seen.add(mode)
+                parsed[key] = uniq
+
+            return parsed
+        except Exception:
+            return parsed
+
+    def _build_adaptive_usb_candidates(self) -> list:
+        """Build USB candidates from camera-advertised formats with compatibility-first pipelines."""
+        candidates = []
+        modes = self._detect_usb_modes()
+        self.detected_usb_modes = modes
+
+        mjpeg_mode = self._pick_best_mode(modes.get("mjpeg", []), 1280, 720, 30)
+        yuy2_mode = self._pick_best_mode(modes.get("yuy2", []), 640, 480, 30)
+
+        if mjpeg_mode:
+            mw, mh, mfps = mjpeg_mode
+            candidates.append(
+                {
+                    "source": self._build_usb_pipeline_mjpeg_compat(mw, mh, mfps),
+                    "backend": cv2.CAP_GSTREAMER,
+                    "label": (
+                        "USB adaptive MJPEG compatibility pipeline "
+                        f"({mw}x{mh}@{mfps})"
+                    ),
+                    "format_key": "mjpeg",
+                }
+            )
+
+        if yuy2_mode:
+            yw, yh, yfps = yuy2_mode
+            candidates.append(
+                {
+                    "source": self._build_usb_pipeline_yuy2_compat(yw, yh, yfps),
+                    "backend": cv2.CAP_GSTREAMER,
+                    "label": (
+                        "USB adaptive YUY2 compatibility pipeline "
+                        f"({yw}x{yh}@{yfps})"
+                    ),
+                    "format_key": "yuy2",
+                }
+            )
+
+        return candidates
+
+    def _open_v4l2_with_preferred_format(self):
+        """Try direct OpenCV V4L2 with camera-advertised preferred formats."""
+        # Ensure we have parsed modes; this is inexpensive and cached in diagnostics.
+        if not self.detected_usb_modes:
+            self.detected_usb_modes = self._detect_usb_modes()
+
+        preferred = []
+
+        mjpeg_mode = self._pick_best_mode(self.detected_usb_modes.get("mjpeg", []), 1280, 720, 30)
+        if mjpeg_mode:
+            preferred.append(("MJPG", mjpeg_mode))
+
+        yuy2_mode = self._pick_best_mode(self.detected_usb_modes.get("yuy2", []), 640, 480, 30)
+        if yuy2_mode:
+            preferred.append(("YUYV", yuy2_mode))
+
+        if not preferred:
+            preferred.append(("MJPG", (1280, 720, 30)))
+
+        camera_index = 0
+        try:
+            if isinstance(CAMERA_DEVICE, str) and CAMERA_DEVICE.startswith("/dev/video"):
+                camera_index = int(CAMERA_DEVICE.replace("/dev/video", ""))
+        except Exception:
+            camera_index = 0
+
+        for fourcc_name, mode in preferred:
+            w, h, fps = mode
+            # OpenCV 3.2 (JP4.6 apt build) does not always support the 2-argument
+            # VideoCapture constructor in Python bindings.
+            cap = cv2.VideoCapture(camera_index)
+            if cap is None or not cap.isOpened():
+                if cap is not None:
+                    cap.release()
+                continue
+
+            try:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc_name))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(w))
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(h))
+                cap.set(cv2.CAP_PROP_FPS, int(fps))
+
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    self.selected_pipeline = (
+                        f"V4L2 direct preferred format {fourcc_name} ({w}x{h}@{fps})"
+                    )
+                    self.selected_pipeline_mode = "compat"
+                    self.selected_pipeline_source = CAMERA_DEVICE
+                    self.selected_pipeline_backend = None
+                    logger.info("Camera opened using %s", self.selected_pipeline)
+                    return cap
+            except Exception:
+                pass
+
+            cap.release()
+
+        return None
 
     def _infer_pipeline_mode(self, label: str) -> str:
         """Infer pipeline mode from descriptive label."""
@@ -133,8 +349,9 @@ class CameraCapture:
         try:
             result = subprocess.run(
                 ["v4l2-ctl", "--device", CAMERA_DEVICE, "--list-formats-ext"],
-                capture_output=True,
-                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
                 timeout=2,
                 check=False,
             )
@@ -301,7 +518,26 @@ class CameraCapture:
             if CAMERA_SOURCE == "usb" and not GST_PIPELINE_IS_OVERRIDE:
                 logger.info("USB camera acceleration mode: %s", CAMERA_ACCELERATION)
 
+                if not self.opencv_gstreamer_enabled:
+                    cap = self._open_v4l2_with_preferred_format()
+                    if cap is not None:
+                        self.cap = cap
+                        self.is_open = True
+                        logger.info("Camera initialized successfully")
+                        return
+
                 usb_candidates = []
+
+                # Adaptive compatibility pipelines from detected camera formats are tried first,
+                # because they are validated via gst-inspect + v4l2 mode introspection.
+                adaptive_candidates = self._build_adaptive_usb_candidates()
+                if adaptive_candidates:
+                    logger.info(
+                        "Detected USB camera modes: mjpeg=%s yuy2=%s",
+                        self.detected_usb_modes.get("mjpeg", []),
+                        self.detected_usb_modes.get("yuy2", []),
+                    )
+                    usb_candidates.extend(adaptive_candidates)
 
                 if CAMERA_ACCELERATION in ("auto", "hardware"):
                     usb_candidates.append(
@@ -346,6 +582,14 @@ class CameraCapture:
                             "format_key": "any",
                         }
                     )
+                    usb_candidates.append(
+                        {
+                            "source": USB_GST_PIPELINE_COMPAT_ANY,
+                            "backend": cv2.CAP_GSTREAMER,
+                            "label": "USB permissive compatibility pipeline (no strict caps)",
+                            "format_key": "any",
+                        }
+                    )
 
                 usb_candidates = self._reorder_usb_candidates_with_probe(usb_candidates)
                 for candidate in usb_candidates:
@@ -356,6 +600,15 @@ class CameraCapture:
                             candidate["label"],
                         )
                     )
+
+                # Last-resort USB fallback: direct V4L2 capture (no GStreamer pipeline string).
+                fallback_sources.append(
+                    (
+                        CAMERA_DEVICE,
+                        None,
+                        "V4L2 device (direct)",
+                    )
+                )
 
             tried_sources = set()
             for source, backend, label in fallback_sources:
@@ -387,7 +640,25 @@ class CameraCapture:
         """Try to open a capture source and release resources immediately on failure."""
         cap = None
         try:
-            if backend is None:
+            # Direct V4L2 fallback handling for /dev/videoN device paths.
+            # Some OpenCV builds may treat '/dev/video0' as an image sequence path when backend is unspecified.
+            if backend is None and isinstance(source, str) and source.startswith("/dev/video"):
+                cap = cv2.VideoCapture(source)
+
+                if cap is None or not cap.isOpened():
+                    try:
+                        camera_index = int(source.replace("/dev/video", ""))
+                    except ValueError:
+                        camera_index = None
+
+                    if camera_index is not None:
+                        try:
+                            if cap is not None:
+                                cap.release()
+                        except Exception:
+                            pass
+                        cap = cv2.VideoCapture(camera_index)
+            elif backend is None:
                 cap = cv2.VideoCapture(source)
             else:
                 cap = cv2.VideoCapture(source, backend)
@@ -423,6 +694,7 @@ class CameraCapture:
 
             if not ret or frame is None:
                 logger.warning("Failed to read frame from camera")
+                self.release()
                 return False, None
 
             self.frame_count += 1
@@ -442,6 +714,7 @@ class CameraCapture:
 
         except Exception as e:
             logger.error(f"Error getting frame: {e}")
+            self.release()
             return False, None
 
     def _process_with_cuda(self, frame) -> np.ndarray:
@@ -505,6 +778,7 @@ class CameraCapture:
             "selected_pipeline_mode": self.selected_pipeline_mode,
             "selected_pipeline_backend": self.selected_pipeline_backend,
             "selected_pipeline_source": source_preview,
+            "detected_usb_modes": self.detected_usb_modes,
             "startup_probe_enabled": self.startup_probe_enabled,
             "startup_probe_formats": self.startup_probe_formats,
             "startup_probe_scores": self.startup_probe_scores,

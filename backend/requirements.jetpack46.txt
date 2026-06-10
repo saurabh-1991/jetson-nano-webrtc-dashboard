@@ -1,7 +1,27 @@
 # JetPack 4.6 (Python 3.6) compatibility requirements
 # Notes:
 # - Jetson's system packages provide OpenCV and Numpy; do NOT install opencv-python or numpy from pip on the device.
+# - This file now contains BOTH:
+#   1) apt system dependencies (commented lines prefixed with: # apt:)
+#   2) pip Python dependencies (normal requirement lines below)
 # - aiortc/av often require building on-device for ARM; adjust pins after you find working versions.
+
+# --- apt system dependencies for setup_jetpack46_native.sh ---
+# apt: python3-pip
+# apt: python3-venv
+# apt: python3-dev
+# apt: python3-opencv
+# apt: python3-numpy
+# apt: v4l-utils
+# apt: gstreamer1.0-tools
+# apt: gstreamer1.0-plugins-base
+# apt: gstreamer1.0-plugins-good
+# apt: gstreamer1.0-plugins-bad
+# apt: gstreamer1.0-plugins-ugly
+# apt: gstreamer1.0-libav
+# apt: python3-jetson-gpio
+
+# --- pip dependencies ---
 fastapi==0.70.0
 # Keep uvicorn on a Python 3.6-compatible release (0.17+ uses asyncio.run).
 uvicorn==0.16.0

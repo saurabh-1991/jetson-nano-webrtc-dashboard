@@ -1,307 +1,239 @@
-# Deployment Guide
+# Jetson Nano WebRTC Dashboard — Deployment (JetPack 4.6)
 
-This document describes how to deploy the Jetson Nano WebRTC Dashboard on a Jetson Nano, including both:
+This document consolidates the old and current deployment notes into one practical runbook.
+It is focused on Jetson Nano with JetPack 4.6 (L4T r32.7.1 / Python 3.6).
 
-- **Docker Compose deployment** (recommended)
-- **Native Jetson deployment** (no Docker)
+## 1) Executive summary (current reality)
 
-It also covers how to access and control the application from a remote PC.
+### Verified working
 
----
+- Docker compose stack starts on older Jetson compose versions.
+- Frontend is served by Nginx at `http://<JETSON_IP>/`.
+- API proxy works via frontend (`/api/system/status`).
+- Backend health endpoint works (`/health`).
+- Native setup script installs apt + pip dependencies successfully for JP4.6.
 
-## Prerequisites
+### Known blocker in current test environment
 
-### Hardware
+- Camera capture still fails in both native and docker runs:
+    - `GET /api/camera/frame` returns `500`
+    - `GET /api/camera/stream` may connect but return no bytes before timeout
+- Observed error:
+    - `VIDEOIO ERROR: V4L2: Pixel format of incoming image is unsupported by OpenCV`
 
-- Jetson Nano board
-- USB webcam or CSI camera connected and supported
-- Jetson Nano power supply and network connectivity
-- Remote PC on the same LAN (or VPN/port forwarding configured)
-
-### Software
-
-- Jetson Nano with JetPack installed
-- Python 3 and `python3-pip`
-- Node.js / npm (for frontend build if using native deployment)
-- Docker and Docker Compose (for Docker deployment)
-- `git` to clone the repo
-
-### Jetson-specific packages
-
-If deploying natively, install:
-
-```bash
-sudo apt update
-sudo apt install -y python3-pip python3-venv python3-opencv \
-  gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
-  python3-jetson-gpio
-```
-
-If using Docker on Jetson, install the Jetson-compatible Docker runtime and Docker Compose.
+So UI + API integration is healthy, while camera format/runtime compatibility remains the open issue.
 
 ---
 
-## Option 1: Docker Compose Deployment (Recommended)
+## 2) Prerequisites
 
-Use Docker Compose to run both backend and frontend on Jetson Nano.
+- Jetson Nano with JetPack 4.6
+- USB camera visible as `/dev/video*` (usually `/dev/video0`)
+- Docker + docker-compose installed on Jetson
+- Project cloned on Jetson host
 
-### 1. Clone repository on Jetson
+Example path used during validation:
 
 ```bash
-cd ~
-git clone https://github.com/saurabh-1991/jetson-nano-webrtc-dashboard.git
-cd jetson-nano-webrtc-dashboard
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
 ```
 
-### 2. Build and run the stack
+---
+
+## 3) Dependency model for JP4.6
+
+JP4.6 dependencies are centralized in:
+
+- `backend/requirements.jetpack46.txt`
+
+This file contains:
+
+- apt packages as commented `# apt: ...` lines (OpenCV/GStreamer/v4l2/etc.)
+- pip packages as normal requirement lines (FastAPI/Uvicorn/etc.)
+
+`backend/scripts/setup_jetpack46_native.sh` parses `# apt:` entries for system install and then installs pip dependencies from the same file.
+
+---
+
+## 4) Native backend deployment (recommended for JP4.6 debugging)
+
+### Step A — Setup native environment
 
 ```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard/backend
+chmod +x scripts/setup_jetpack46_native.sh scripts/run_jetpack46_native.sh
+./scripts/setup_jetpack46_native.sh
+```
+
+What it does:
+
+- installs apt deps from `requirements.jetpack46.txt` (`# apt:` lines)
+- creates `.venv-jp46` with `--system-site-packages` (so apt `cv2` is visible)
+- installs pip deps from `requirements.jetpack46.txt`
+
+### Step B — Run backend natively
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard/backend
+./scripts/run_jetpack46_native.sh
+```
+
+Important built-in behavior:
+
+- kills stale `/dev/video0` lock holders before start
+- kills stale uvicorn process before start
+- verifies `cv2` exists in active venv
+- releases camera handle on read/exception failure paths
+
+### Optional runtime tuning before launch
+
+```bash
+export CAMERA_SOURCE=usb
+export CAMERA_ACCELERATION=auto
+export CAMERA_USB_STARTUP_PROBE=true
+export CAMERA_CSI_SENSOR_ID=0
+# export GST_PIPELINE_OVERRIDE='v4l2src device=/dev/video0 ! ... ! appsink'
+```
+
+### Step C — Validate native backend
+
+```bash
+curl -sS http://127.0.0.1:8000/health
+curl -sS http://127.0.0.1:8000/api/system/status
+curl -sS http://127.0.0.1:8000/api/system/info
+curl -sS -o /tmp/native_frame.jpg -w "http=%{http_code} size=%{size_download}\n" http://127.0.0.1:8000/api/camera/frame
+curl -sS --max-time 4 http://127.0.0.1:8000/api/camera/stream | head -c 120 | xxd -g 1
+```
+
+---
+
+## 5) Docker full-stack deployment (frontend + backend)
+
+### Step A — Build and run
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+docker-compose down --remove-orphans
 docker-compose up -d --build
-```
-
-### 3. Verify service startup
-
-```bash
 docker-compose ps
 ```
 
-### 4. Open the dashboard from a remote PC
-
-From your remote PC browser, open:
-
-```text
-http://<JETSON_IP>/
-```
-
-If the frontend is served on port 80 by Docker Compose, this is the correct URL.
-
-### 5. Backend API health checks
-
-From the Jetson or remote PC:
+### Step B — Validate stack
 
 ```bash
-curl http://<JETSON_IP>:8000/health
-curl http://<JETSON_IP>:8000/api/system/status
+curl -sS http://127.0.0.1:8000/health
+curl -sS -I http://127.0.0.1/
+curl -sS http://127.0.0.1/api/system/status
+curl -sS -o /tmp/docker_frame.jpg -w "http=%{http_code} size=%{size_download}\n" http://127.0.0.1/api/camera/frame
+curl -sS --max-time 4 http://127.0.0.1/api/camera/stream | head -c 120 | xxd -g 1
 ```
 
-### 6. Stop or restart
+### Docker log commands (service names matter)
 
 ```bash
-docker-compose stop
-docker-compose down
+docker-compose config --services
+docker-compose logs --tail=200 jetson-backend
+docker-compose logs --tail=200 jetson-frontend
 ```
-
-### Notes
-
-- The Compose setup mounts `./backend` into the backend container and exposes `/dev` for camera access.
-- The backend container is privileged so it can access Jetson hardware and devices.
-- If your remote PC cannot access Jetson on port 80, check firewall or router settings.
 
 ---
 
-## Option 2: Native Jetson Deployment (No Docker)
+## 6) Frontend behavior and WebRTC fallback
 
-This approach runs the backend and frontend directly on the Jetson Nano.</n
+- Frontend tries WebRTC first.
+- On JP4.6 core profile (without aiortc stack), `POST /api/webrtc/offer` may return `503`.
+- In that case frontend should fallback to MJPEG (`/api/camera/stream`).
 
-### 1. Clone repository on Jetson
-
-```bash
-cd ~
-git clone https://github.com/saurabh-1991/jetson-nano-webrtc-dashboard.git
-cd jetson-nano-webrtc-dashboard
-```
-
-### 2. Backend setup
+Quick check:
 
 ```bash
-cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+curl -X POST http://127.0.0.1:8000/api/webrtc/offer \
+    -H "Content-Type: application/json" \
+    -d '{"sdp":"test","type":"offer"}'
 ```
-
-### 3. Frontend build setup
-
-```bash
-cd ../frontend
-npm install
-npm run build
-```
-
-### 4. Serve frontend with Nginx or static server
-
-The repo includes a `frontend/Dockerfile` that uses Nginx, but for native deployment you can also use a static server.
-
-#### Option A: Use Nginx
-
-Install Nginx on Jetson and point it to the built files.
-
-```bash
-sudo apt install -y nginx
-sudo rm -f /etc/nginx/conf.d/default.conf
-sudo tee /etc/nginx/conf.d/jetson-dashboard.conf > /dev/null <<'EOF'
-server {
-    listen 80;
-    server_name _;
-
-    root /home/<user>/jetson-nano-webrtc-dashboard/frontend/dist;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-EOF
-
-sudo nginx -t
-sudo systemctl restart nginx
-```
-
-Replace `/home/<user>` with your Jetson username path.
-
-#### Option B: Use a lightweight static server
-
-```bash
-cd frontend
-npx serve -s dist -l 80
-```
-
-### 5. Run backend
-
-```bash
-cd ~/jetson-nano-webrtc-dashboard/backend
-source venv/bin/activate
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-### 6. Access from remote PC
-
-- If using Nginx: `http://<JETSON_IP>/`
-- If using `serve` and port 80: `http://<JETSON_IP>/`
-- If using Vite dev server: `http://<JETSON_IP>:5173`
-
-### 7. Validate API from remote PC
-
-```bash
-curl http://<JETSON_IP>:8000/health
-curl http://<JETSON_IP>:8000/api/system/status
-curl http://<JETSON_IP>:8000/api/gpio/status
-```
-
-### Notes
-
-- If using Nginx, the frontend can proxy `/api` to the backend and the browser only needs `http://<JETSON_IP>/`.
-- If the frontend is built statically and served from Nginx, no extra configuration is required in the app if API calls are relative.
 
 ---
 
-## Jetson-specific camera and GPIO checks
+## 7) Camera lock cleanup (when webcam LED stays ON)
 
-### Camera access
-
-Confirm the camera device is available:
+Run on Jetson host:
 
 ```bash
-ls /dev/video*
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+docker-compose down --remove-orphans || true
+ids=$(docker ps -aq --filter name=jetson-nano); [ -n "$ids" ] && docker rm -f $ids || true
+pkill -f 'uvicorn app.main:app' || true
+pkill -f 'gst-launch' || true
+pkill -f 'python.*camera' || true
+pkill -f 'ffmpeg' || true
+fuser -k /dev/video0 || true
+fuser -v /dev/video0 || true
 ```
 
-If using a CSI camera, you may need a Jetson-specific GStreamer pipeline instead of the default USB webcam pipeline.
-
-### GPIO access
-
-Confirm your user can access GPIO:
-
-```bash
-sudo usermod -a -G gpio $USER
-```
-
-Then log out and log in again.
+If `fuser -v /dev/video0` shows nothing, the device is released.
 
 ---
 
-## Remote PC access and control
+## 8) Troubleshooting playbook
 
-### Find Jetson IP address
-
-On Jetson, run:
+### A) Camera fails (`/api/camera/frame` = 500)
 
 ```bash
-ip addr show
+ls -l /dev/video*
+v4l2-ctl --list-formats-ext -d /dev/video0
+sudo fuser -v /dev/video0
+tail -n 200 /tmp/native_backend.log
+docker-compose logs --tail=200 jetson-backend
 ```
 
-Look for the IP on `eth0` or `wlan0`.
+### B) Frontend works but API fails
 
-### Access from remote PC
+- Verify Nginx proxy in `frontend/nginx.conf`
+    - `/api` should be plain HTTP proxy (no forced upgrade)
+    - `/ws` should keep websocket upgrade headers
 
-Open a browser to:
-
-```text
-http://<JETSON_IP>/
-```
-
-If the frontend is served on port 80, this will load the dashboard.
-
-### Remote command access
-
-If the remote PC is outside the LAN, use one of these options:
-
-- VPN into the network
-- Router port forwarding for ports `80` and `8000`
-- SSH tunnel:
+### C) CUDA appears unavailable
 
 ```bash
-ssh -L 8000:localhost:8000 -L 80:localhost:80 user@<JETSON_IP>
+python3 - <<'PY'
+import cv2
+print('opencv:', cv2.__version__)
+print('has cv2.cuda:', hasattr(cv2, 'cuda'))
+if hasattr(cv2, 'cuda'):
+        print('cuda devices:', cv2.cuda.getCudaEnabledDeviceCount())
+PY
 ```
 
-Then browse locally to `http://localhost/`.
+Note: On JP4.6, CPU fallback is expected on many builds.
 
 ---
 
-## Troubleshooting
+## 9) Compose compatibility notes for old Jetson setups
 
-### If frontend cannot reach backend
-
-- Confirm backend is running
-- Confirm Jetson firewall allows `8000` and `80`
-- Confirm the browser is pointing to the Jetson IP
-- Confirm Nginx proxy is forwarding `/api` to `http://127.0.0.1:8000`
-
-### If WebRTC stream fails
-
-- Check backend logs for `/api/webrtc/offer` errors
-- Confirm the camera is accessible and not held by another app
-- Confirm the browser and Jetson are on the same network
-
-### If LED stays on after shutdown
-
-- Stop backend process completely
-- Verify there are no leftover `uvicorn` or `python3` processes
-- Use `ps aux | grep -E 'uvicorn|python3'`
+- Compose file intentionally uses legacy-compatible schema (`version: '3.3'`).
+- Avoid unsupported keys on very old compose versions (for example `runtime` and some extended healthcheck options).
 
 ---
 
-## Recommended deployment summary
+## 10) Smoke checklist
 
-- Use **Docker Compose** for easiest deployment and remote access.
-- Use **Native deployment** when you want minimal overhead or direct Jetson integration.
-- Use **Nginx proxy** if you want the app available on port `80` and simplified API routing.
+- [ ] Native setup completes
+- [ ] Native backend starts
+- [ ] Docker stack starts
+- [ ] Frontend root (`/`) returns 200
+- [ ] Frontend proxy (`/api/system/status`) returns JSON
+- [ ] `/health` returns healthy
+- [ ] Camera frame endpoint returns JPEG (currently blocked in latest validation)
+- [ ] MJPEG stream returns bytes (currently blocked in latest validation)
 
 ---
 
-## References
+## 11) Deployment-relevant files
 
 - `docker-compose.yml`
-- `backend/Dockerfile`
-- `frontend/Dockerfile`
+- `backend/Dockerfile.jetpack46`
+- `backend/requirements.jetpack46.txt`
+- `backend/scripts/setup_jetpack46_native.sh`
+- `backend/scripts/run_jetpack46_native.sh`
+- `backend/app/camera.py`
 - `frontend/nginx.conf`
-- `backend/app/config.py`
