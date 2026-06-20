@@ -115,18 +115,20 @@ async def process_websocket_message(websocket: WebSocket, message: dict):
 
         elif message_type == "gpio_on":
             gpio = get_gpio_controller()
-            result = gpio.led_on()
+            gpio.led_on()
+            state = gpio.get_led_state()
             await manager.broadcast({
                 "type": "gpio_state_changed",
-                "data": {"led_on": result}
+                "data": state
             })
 
         elif message_type == "gpio_off":
             gpio = get_gpio_controller()
-            result = gpio.led_off()
+            gpio.led_off()
+            state = gpio.get_led_state()
             await manager.broadcast({
                 "type": "gpio_state_changed",
-                "data": {"led_on": not result}
+                "data": state
             })
 
         else:

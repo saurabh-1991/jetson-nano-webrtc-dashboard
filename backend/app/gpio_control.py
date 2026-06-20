@@ -23,8 +23,9 @@ class GPIOController:
         self.led_pin = GPIO_LED_PIN
         self.button_pin = GPIO_BUTTON_PIN
         self.led_state = False
+        self.gpio_available = GPIO_AVAILABLE
         
-        if GPIO_AVAILABLE:
+        if self.gpio_available:
             try:
                 GPIO.setmode(GPIO.BOARD)
                 GPIO.setup(self.led_pin, GPIO.OUT, initial=GPIO.LOW)
@@ -33,12 +34,18 @@ class GPIOController:
             except Exception as e:
                 logger.error(f"Failed to initialize GPIO: {e}")
                 GPIO_AVAILABLE = False
+                self.gpio_available = False
+        else:
+            logger.warning("GPIO runtime unavailable; LED operations will be rejected")
 
     def led_on(self) -> bool:
         """Turn LED on"""
         try:
-            if GPIO_AVAILABLE:
-                GPIO.output(self.led_pin, GPIO.HIGH)
+            if not self.gpio_available:
+                logger.warning("Ignoring LED ON request: GPIO runtime unavailable")
+                return False
+
+            GPIO.output(self.led_pin, GPIO.HIGH)
             self.led_state = True
             logger.info("LED turned ON")
             return True
@@ -49,8 +56,11 @@ class GPIOController:
     def led_off(self) -> bool:
         """Turn LED off"""
         try:
-            if GPIO_AVAILABLE:
-                GPIO.output(self.led_pin, GPIO.LOW)
+            if not self.gpio_available:
+                logger.warning("Ignoring LED OFF request: GPIO runtime unavailable")
+                return False
+
+            GPIO.output(self.led_pin, GPIO.LOW)
             self.led_state = False
             logger.info("LED turned OFF")
             return True
@@ -69,13 +79,13 @@ class GPIOController:
         """Get current LED state"""
         return {
             "led_on": self.led_state,
-            "gpio_available": GPIO_AVAILABLE
+            "gpio_available": self.gpio_available
         }
 
     def cleanup(self):
         """Clean up GPIO"""
         try:
-            if GPIO_AVAILABLE:
+            if self.gpio_available:
                 GPIO.cleanup()
                 logger.info("GPIO cleanup completed")
         except Exception as e:
