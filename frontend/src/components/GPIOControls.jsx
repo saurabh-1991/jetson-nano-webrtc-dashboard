@@ -8,9 +8,13 @@ export const GPIOControls = () => {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  // Fetch initial GPIO state
+  // Keep GPIO state synchronized with backend status
   useEffect(() => {
     fetchGPIOStatus()
+
+    const interval = setInterval(fetchGPIOStatus, 5000)
+
+    return () => clearInterval(interval)
   }, [])
 
   const fetchGPIOStatus = async () => {
@@ -32,9 +36,11 @@ export const GPIOControls = () => {
         throw new Error('GPIO not available on backend runtime')
       }
       setLedState(response.data.gpio.led_on)
+      setGpioAvailable(response.data.gpio.gpio_available !== false)
     } catch (err) {
       setError('Failed to turn LED on')
       console.error(err)
+      await fetchGPIOStatus()
     } finally {
       setIsLoading(false)
     }
@@ -49,9 +55,11 @@ export const GPIOControls = () => {
         throw new Error('GPIO not available on backend runtime')
       }
       setLedState(response.data.gpio.led_on)
+      setGpioAvailable(response.data.gpio.gpio_available !== false)
     } catch (err) {
       setError('Failed to turn LED off')
       console.error(err)
+      await fetchGPIOStatus()
     } finally {
       setIsLoading(false)
     }
@@ -66,9 +74,11 @@ export const GPIOControls = () => {
         throw new Error('GPIO not available on backend runtime')
       }
       setLedState(response.data.gpio.led_on)
+      setGpioAvailable(response.data.gpio.gpio_available !== false)
     } catch (err) {
       setError('Failed to toggle LED')
       console.error(err)
+      await fetchGPIOStatus()
     } finally {
       setIsLoading(false)
     }
