@@ -12,16 +12,21 @@ It is focused on Jetson Nano with JetPack 4.6 (L4T r32.7.1 / Python 3.6).
 - API proxy works via frontend (`/api/system/status`).
 - Backend health endpoint works (`/health`).
 - Native setup script installs apt + pip dependencies successfully for JP4.6.
+- Camera endpoints are working in latest validation:
+    - `GET /api/camera/frame` returns `200` with JPEG bytes
+    - `GET /api/camera/stream` returns `200` with MJPEG stream bytes
+- Remote access from another laptop on LAN is working:
+    - `http://<JETSON_IP>/`
+    - `http://<JETSON_IP>/api/camera/frame`
+    - `http://<JETSON_IP>/api/camera/stream`
 
-### Known blocker in current test environment
+### Current caveats
 
-- Camera capture still fails in both native and docker runs:
-    - `GET /api/camera/frame` returns `500`
-    - `GET /api/camera/stream` may connect but return no bytes before timeout
-- Observed error:
-    - `VIDEOIO ERROR: V4L2: Pixel format of incoming image is unsupported by OpenCV`
+- On JP4.6 core profile, WebRTC may be unavailable and `POST /api/webrtc/offer` may return `503`.
+- This is expected when `aiortc` path is not active; frontend should fallback to MJPEG automatically.
+- OpenCV CUDA may be unavailable on some JP4.6 builds (`cv2.cuda` missing); CPU fallback is expected.
 
-So UI + API integration is healthy, while camera format/runtime compatibility remains the open issue.
+So UI + API + camera streaming is healthy with MJPEG fallback, even when WebRTC/CUDA are unavailable.
 
 ---
 
@@ -154,7 +159,41 @@ curl -X POST http://127.0.0.1:8000/api/webrtc/offer \
 
 ---
 
-## 7) Camera lock cleanup (when webcam LED stays ON)
+## 7) How to close/stop deployment cleanly
+
+Use one of the following depending on how you started the app.
+
+### A) If running via Docker Compose (recommended)
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+docker-compose down --remove-orphans
+docker ps --filter name=jetson-nano
+```
+
+Expected: no `jetson-nano-*` containers are running.
+
+### B) If running native dashboard script
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+chmod +x scripts/stop_native_dashboard.sh
+./scripts/stop_native_dashboard.sh
+```
+
+This stops native backend/frontend processes and removes fallback frontend dev container if used.
+
+### C) Verify camera is released before unplug/redeploy
+
+```bash
+fuser -v /dev/video0 || true
+```
+
+If no PID is shown, camera device is released.
+
+---
+
+## 8) Camera lock cleanup (when webcam LED stays ON)
 
 Run on Jetson host:
 
@@ -174,7 +213,7 @@ If `fuser -v /dev/video0` shows nothing, the device is released.
 
 ---
 
-## 8) Troubleshooting playbook
+## 9) Troubleshooting playbook
 
 ### A) Camera fails (`/api/camera/frame` = 500)
 
@@ -208,27 +247,28 @@ Note: On JP4.6, CPU fallback is expected on many builds.
 
 ---
 
-## 9) Compose compatibility notes for old Jetson setups
+## 10) Compose compatibility notes for old Jetson setups
 
 - Compose file intentionally uses legacy-compatible schema (`version: '3.3'`).
 - Avoid unsupported keys on very old compose versions (for example `runtime` and some extended healthcheck options).
+- Very old Jetson `docker-compose` (Python2 era) may appear to hang in startup checks; wait for command completion and confirm final state with `docker-compose ps`.
 
 ---
 
-## 10) Smoke checklist
+## 11) Smoke checklist
 
-- [ ] Native setup completes
-- [ ] Native backend starts
-- [ ] Docker stack starts
-- [ ] Frontend root (`/`) returns 200
-- [ ] Frontend proxy (`/api/system/status`) returns JSON
-- [ ] `/health` returns healthy
-- [ ] Camera frame endpoint returns JPEG (currently blocked in latest validation)
-- [ ] MJPEG stream returns bytes (currently blocked in latest validation)
+- [x] Native setup completes
+- [x] Native backend starts
+- [x] Docker stack starts
+- [x] Frontend root (`/`) returns 200
+- [x] Frontend proxy (`/api/system/status`) returns JSON
+- [x] `/health` returns healthy
+- [x] Camera frame endpoint returns JPEG
+- [x] MJPEG stream returns bytes
 
 ---
 
-## 11) Deployment-relevant files
+## 12) Deployment-relevant files
 
 - `docker-compose.yml`
 - `backend/Dockerfile.jetpack46`
