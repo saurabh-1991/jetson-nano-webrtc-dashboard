@@ -5,12 +5,13 @@ import './DeviceStatus.css'
 export const DeviceStatus = () => {
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState(null)
 
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        setLoading(true)
+        setIsRefreshing(true)
         const response = await systemAPI.getStatus()
         setStatus(response.data)
         setError(null)
@@ -18,6 +19,7 @@ export const DeviceStatus = () => {
         console.error('Failed to fetch device status:', err)
         setError('Failed to load device status')
       } finally {
+        setIsRefreshing(false)
         setLoading(false)
       }
     }
@@ -117,7 +119,10 @@ export const DeviceStatus = () => {
 
       {status?.timestamp && (
         <div className="status-footer">
-          Last updated: {new Date(status.timestamp).toLocaleTimeString()}
+          <span>Last updated: {new Date(status.timestamp).toLocaleTimeString()}</span>
+          <span className={`refresh-indicator ${isRefreshing ? 'active' : ''}`}>
+            {isRefreshing ? 'Updating…' : 'Live'}
+          </span>
         </div>
       )}
     </div>
