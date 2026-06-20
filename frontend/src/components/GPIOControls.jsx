@@ -4,6 +4,7 @@ import './GPIOControls.css'
 
 export const GPIOControls = () => {
   const [ledState, setLedState] = useState(false)
+  const [gpioAvailable, setGpioAvailable] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -16,6 +17,7 @@ export const GPIOControls = () => {
     try {
       const response = await gpioAPI.getStatus()
       setLedState(response.data.gpio.led_on || false)
+      setGpioAvailable(response.data.gpio.gpio_available !== false)
     } catch (err) {
       console.error('Failed to fetch GPIO status:', err)
     }
@@ -26,6 +28,9 @@ export const GPIOControls = () => {
     setError(null)
     try {
       const response = await gpioAPI.turnOn()
+      if (!response.data.success) {
+        throw new Error('GPIO not available on backend runtime')
+      }
       setLedState(response.data.gpio.led_on)
     } catch (err) {
       setError('Failed to turn LED on')
@@ -40,7 +45,10 @@ export const GPIOControls = () => {
     setError(null)
     try {
       const response = await gpioAPI.turnOff()
-      setLedState(!response.data.gpio.led_on)
+      if (!response.data.success) {
+        throw new Error('GPIO not available on backend runtime')
+      }
+      setLedState(response.data.gpio.led_on)
     } catch (err) {
       setError('Failed to turn LED off')
       console.error(err)
@@ -54,6 +62,9 @@ export const GPIOControls = () => {
     setError(null)
     try {
       const response = await gpioAPI.toggle()
+      if (!response.data.success) {
+        throw new Error('GPIO not available on backend runtime')
+      }
       setLedState(response.data.gpio.led_on)
     } catch (err) {
       setError('Failed to toggle LED')
@@ -77,7 +88,7 @@ export const GPIOControls = () => {
       <div className="gpio-buttons">
         <button
           onClick={handleLedOn}
-          disabled={isLoading || ledState}
+          disabled={isLoading || ledState || !gpioAvailable}
           className="btn btn-success"
         >
           {isLoading ? 'Loading...' : 'LED ON'}
@@ -85,7 +96,7 @@ export const GPIOControls = () => {
 
         <button
           onClick={handleLedOff}
-          disabled={isLoading || !ledState}
+          disabled={isLoading || !ledState || !gpioAvailable}
           className="btn btn-danger"
         >
           {isLoading ? 'Loading...' : 'LED OFF'}
@@ -93,12 +104,18 @@ export const GPIOControls = () => {
 
         <button
           onClick={handleToggle}
-          disabled={isLoading}
+          disabled={isLoading || !gpioAvailable}
           className="btn btn-warning"
         >
           {isLoading ? 'Loading...' : 'TOGGLE'}
         </button>
       </div>
+
+      {!gpioAvailable && (
+        <div className="error-alert">
+          GPIO is unavailable in backend runtime. Hardware LED control is disabled.
+        </div>
+      )}
 
       {error && (
         <div className="error-alert">
