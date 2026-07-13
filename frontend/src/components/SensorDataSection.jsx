@@ -227,7 +227,12 @@ export const SensorDataSection = () => {
       </section>
 
       <section className="sensor-card graph-card">
-        <h2>Graph</h2>
+        <div className="graph-title-row">
+          <h2>Graph</h2>
+          {!isSimulationEnabled && numericSamples.length === 0 && (
+            <span className="logger-warning-badge">NO LOGGER DATA</span>
+          )}
+        </div>
 
         <div className="graph-controls">
           <div className="graph-mode-toggle">
