@@ -187,12 +187,18 @@ async def sensors_latest():
 
 
 @app.get("/api/sensors/history")
-async def sensors_history(limit: int = 120):
+async def sensors_history(limit: int = 120, interval_minutes: int = 1, hours: int = 24):
     """Get recent sensor reading history for graph plotting."""
-    history = get_sensor_data_service().get_history(limit=limit)
+    history = get_sensor_data_service().get_history(
+        limit=limit,
+        interval_minutes=interval_minutes,
+        hours=hours,
+    )
     return {
         "history": history,
         "count": len(history),
+        "interval_minutes": interval_minutes,
+        "hours": hours,
         "timestamp": datetime.now().isoformat()
     }
 

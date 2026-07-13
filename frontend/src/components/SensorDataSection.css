@@ -63,6 +63,64 @@
   font-size: 0.82rem;
 }
 
+.sensor-last-updated {
+  margin-top: 0.85rem;
+  font-size: 0.78rem;
+  color: #475569;
+}
+
+.graph-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.graph-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.graph-tab {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #475569;
+  padding: 0.25rem 0.55rem;
+  cursor: pointer;
+}
+
+.graph-tab.active {
+  background: #f8fafc;
+}
+
+.history-filters {
+  display: inline-flex;
+  gap: 0.5rem;
+}
+
+.history-filters label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.68rem;
+  color: #475569;
+  font-weight: 600;
+}
+
+.history-filters select {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.72rem;
+  color: #111827;
+  background: #fff;
+}
+
 .graph-legend {
   display: flex;
   flex-wrap: wrap;
@@ -86,11 +144,11 @@
 
 .graph-wrapper {
   width: 100%;
-  height: 230px;
+  min-height: 265px;
   background: #f8fafc;
   border: 1px solid #e5e7eb;
   border-radius: 6px;
-  padding: 0.35rem;
+  padding: 0.45rem;
 }
 
 .sensor-graph {
@@ -113,13 +171,63 @@
   font-size: 0.86rem;
 }
 
+.graph-axis-x {
+  margin-top: 0.35rem;
+}
+
+.axis-title {
+  display: block;
+  font-size: 0.68rem;
+  color: #475569;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.axis-ticks {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.35rem;
+  overflow-x: auto;
+}
+
+.axis-tick {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 52px;
+  font-size: 0.62rem;
+  color: #334155;
+  line-height: 1.2;
+}
+
+.axis-tick small {
+  font-size: 0.58rem;
+  color: #64748b;
+}
+
+.graph-axis-y {
+  margin-top: 0.25rem;
+  font-size: 0.68rem;
+  color: #475569;
+  font-weight: 600;
+}
+
 @media (max-width: 860px) {
   .reading-card,
   .graph-card {
     grid-column: 1 / -1;
   }
 
+  .graph-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .history-filters {
+    justify-content: flex-start;
+  }
+
   .graph-wrapper {
-    height: 200px;
+    min-height: 230px;
   }
 }

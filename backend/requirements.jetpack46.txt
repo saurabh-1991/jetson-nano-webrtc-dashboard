@@ -28,6 +28,10 @@ uvicorn==0.16.0
 python-multipart==0.0.5
 pydantic==1.8.2
 
+# Modbus RTU (RS-485) sensor reader
+pymodbus==2.5.3
+pyserial==3.5
+
 # NOTE: WebRTC dependencies are intentionally excluded for JetPack 4.6 core deployment
 # because av/aiortc compilation is incompatible with the stock FFmpeg stack on many JP4.6 images.
 # The backend runs with MJPEG streaming and REST/WebSocket APIs without these packages.

@@ -40,7 +40,8 @@ export const systemAPI = {
 // Sensor data endpoints
 export const sensorAPI = {
   getLatest: () => api.get('/sensors/latest'),
-  getHistory: (limit = 120) => api.get(`/sensors/history?limit=${limit}`),
+  getHistory: ({ limit = 120, intervalMinutes = 1, hours = 24 } = {}) =>
+    api.get(`/sensors/history?limit=${limit}&interval_minutes=${intervalMinutes}&hours=${hours}`),
 }
 
 // WebRTC endpoints

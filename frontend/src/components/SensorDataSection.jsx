@@ -8,19 +8,43 @@ const SERIES = [
   { key: 'exhaust_temp', label: 'Exaust Temp', color: '#f59e0b' },
 ]
 
+const HISTORY_INTERVAL_OPTIONS = [
+  { value: 1, label: '1 min' },
+  { value: 5, label: '5 min' },
+  { value: 15, label: '15 min' },
+  { value: 30, label: '30 min' },
+]
+
+const HISTORY_RANGE_OPTIONS = [
+  { value: 6, label: 'Last 6h' },
+  { value: 12, label: 'Last 12h' },
+  { value: 24, label: 'Last 24h' },
+  { value: 48, label: 'Last 48h' },
+]
+
 function formatValue(value) {
   if (typeof value !== 'number') return '--'
   return `${value.toFixed(1)} °C`
 }
 
-function buildPolyline(history, key, width, height, minY, maxY) {
+function formatDateTime(value) {
+  if (!value) return '--'
+  try {
+    return new Date(value).toLocaleString()
+  } catch {
+    return '--'
+  }
+}
+
+function buildPolyline(history, key, width, height, minY, maxY, leftPad = 0, rightPad = 0) {
   if (!history || history.length < 2) return ''
-  const xStep = width / Math.max(history.length - 1, 1)
+  const plotWidth = Math.max(width - leftPad - rightPad, 1)
+  const xStep = plotWidth / Math.max(history.length - 1, 1)
   const yRange = Math.max(maxY - minY, 1)
 
   return history
     .map((item, index) => {
-      const x = index * xStep
+      const x = leftPad + index * xStep
       const yValue = typeof item[key] === 'number' ? item[key] : minY
       const y = height - ((yValue - minY) / yRange) * height
       return `${x.toFixed(2)},${y.toFixed(2)}`
@@ -28,9 +52,51 @@ function buildPolyline(history, key, width, height, minY, maxY) {
     .join(' ')
 }
 
+function buildTimeTicks(history, width, leftPad = 0, rightPad = 0, tickMinutes = 30) {
+  if (!history || history.length < 2) return []
+
+  const plotWidth = Math.max(width - leftPad - rightPad, 1)
+  const firstTs = new Date(history[0].timestamp).getTime()
+  const lastTs = new Date(history[history.length - 1].timestamp).getTime()
+
+  if (!Number.isFinite(firstTs) || !Number.isFinite(lastTs) || lastTs <= firstTs) {
+    return []
+  }
+
+  const tickMs = tickMinutes * 60 * 1000
+  const start = Math.ceil(firstTs / tickMs) * tickMs
+  const ticks = []
+
+  for (let ts = start; ts <= lastTs; ts += tickMs) {
+    const ratio = (ts - firstTs) / (lastTs - firstTs)
+    const x = leftPad + ratio * plotWidth
+    const dt = new Date(ts)
+    ticks.push({
+      x,
+      timeLabel: dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      dateLabel: dt.toLocaleDateString([], { day: '2-digit', month: 'short' }),
+    })
+  }
+
+  if (ticks.length === 0) {
+    const dt = new Date(lastTs)
+    ticks.push({
+      x: leftPad + plotWidth,
+      timeLabel: dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      dateLabel: dt.toLocaleDateString([], { day: '2-digit', month: 'short' }),
+    })
+  }
+
+  return ticks
+}
+
 export const SensorDataSection = () => {
   const [latest, setLatest] = useState(null)
   const [history, setHistory] = useState([])
+  const [activeTab, setActiveTab] = useState(SERIES[0].key)
+  const [historyIntervalMinutes, setHistoryIntervalMinutes] = useState(5)
+  const [historyHours, setHistoryHours] = useState(24)
+  const [lastUpdated, setLastUpdated] = useState(null)
   const [error, setError] = useState(null)
 
   useEffect(() => {
@@ -40,13 +106,18 @@ export const SensorDataSection = () => {
       try {
         const [latestResponse, historyResponse] = await Promise.all([
           sensorAPI.getLatest(),
-          sensorAPI.getHistory(90),
+          sensorAPI.getHistory({
+            limit: 500,
+            intervalMinutes: historyIntervalMinutes,
+            hours: historyHours,
+          }),
         ])
 
         if (!mounted) return
 
         setLatest(latestResponse.data?.sensors || null)
         setHistory(Array.isArray(historyResponse.data?.history) ? historyResponse.data.history : [])
+        setLastUpdated(latestResponse.data?.sensors?.timestamp || latestResponse.data?.timestamp || null)
         setError(null)
       } catch (err) {
         if (!mounted) return
@@ -62,12 +133,12 @@ export const SensorDataSection = () => {
       mounted = false
       clearInterval(interval)
     }
-  }, [])
+  }, [historyIntervalMinutes, historyHours])
 
   const chartMeta = useMemo(() => {
-    const values = history.flatMap((item) =>
-      SERIES.map((series) => item?.[series.key]).filter((v) => typeof v === 'number')
-    )
+    const values = history
+      .map((item) => item?.[activeTab])
+      .filter((v) => typeof v === 'number')
 
     if (values.length === 0) {
       return { minY: 0, maxY: 100 }
@@ -81,7 +152,17 @@ export const SensorDataSection = () => {
       minY: minRaw - pad,
       maxY: maxRaw + pad,
     }
-  }, [history])
+  }, [history, activeTab])
+
+  const activeSeries = SERIES.find((s) => s.key === activeTab) || SERIES[0]
+  const graphWidth = 560
+  const graphHeight = 180
+  const graphLeftPad = 8
+  const graphRightPad = 8
+  const timeTicks = useMemo(
+    () => buildTimeTicks(history, graphWidth, graphLeftPad, graphRightPad, 30),
+    [history]
+  )
 
   return (
     <div className="sensor-row-grid">
@@ -98,10 +179,58 @@ export const SensorDataSection = () => {
         </div>
 
         {error && <div className="sensor-error">{error}</div>}
+
+        <div className="sensor-last-updated">
+          Last updated: <strong>{formatDateTime(lastUpdated)}</strong>
+        </div>
       </section>
 
       <section className="sensor-card graph-card">
         <h2>Graph</h2>
+
+        <div className="graph-controls">
+          <div className="graph-tabs" role="tablist" aria-label="Sensor graph tabs">
+            {SERIES.map((series) => (
+              <button
+                key={series.key}
+                className={`graph-tab ${activeTab === series.key ? 'active' : ''}`}
+                style={activeTab === series.key ? { borderColor: series.color, color: series.color } : undefined}
+                onClick={() => setActiveTab(series.key)}
+                role="tab"
+                aria-selected={activeTab === series.key}
+                type="button"
+              >
+                {series.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="history-filters">
+            <label>
+              Interval
+              <select
+                value={historyIntervalMinutes}
+                onChange={(e) => setHistoryIntervalMinutes(Number(e.target.value))}
+              >
+                {HISTORY_INTERVAL_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              Range
+              <select
+                value={historyHours}
+                onChange={(e) => setHistoryHours(Number(e.target.value))}
+              >
+                {HISTORY_RANGE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
 
         <div className="graph-legend">
           {SERIES.map((series) => (
@@ -116,20 +245,43 @@ export const SensorDataSection = () => {
           {history.length < 2 ? (
             <div className="graph-empty">Waiting for sensor samples…</div>
           ) : (
-            <svg viewBox="0 0 600 220" className="sensor-graph" preserveAspectRatio="none">
-              <line x1="0" y1="220" x2="600" y2="220" className="axis-line" />
-              <line x1="0" y1="0" x2="0" y2="220" className="axis-line" />
+            <>
+              <svg viewBox={`0 0 ${graphWidth} ${graphHeight}`} className="sensor-graph" preserveAspectRatio="none">
+                <line x1={graphLeftPad} y1={graphHeight} x2={graphWidth - graphRightPad} y2={graphHeight} className="axis-line" />
 
-              {SERIES.map((series) => (
                 <polyline
-                  key={series.key}
                   fill="none"
-                  stroke={series.color}
+                  stroke={activeSeries.color}
                   strokeWidth="3"
-                  points={buildPolyline(history, series.key, 600, 220, chartMeta.minY, chartMeta.maxY)}
+                  points={buildPolyline(
+                    history,
+                    activeSeries.key,
+                    graphWidth,
+                    graphHeight,
+                    chartMeta.minY,
+                    chartMeta.maxY,
+                    graphLeftPad,
+                    graphRightPad,
+                  )}
                 />
-              ))}
-            </svg>
+              </svg>
+
+              <div className="graph-axis-x">
+                <span className="axis-title">X-Axis: Time (30 min ticks, day/date)</span>
+                <div className="axis-ticks">
+                  {timeTicks.map((tick, idx) => (
+                    <span key={`${tick.timeLabel}-${tick.dateLabel}-${idx}`} className="axis-tick">
+                      <span>{tick.timeLabel}</span>
+                      <small>{tick.dateLabel}</small>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="graph-axis-y">
+                Y-Axis: Reading ({activeSeries.label})
+              </div>
+            </>
           )}
         </div>
       </section>
