@@ -179,9 +179,11 @@ async def system_status():
 @app.get("/api/sensors/latest")
 async def sensors_latest():
     """Get latest sensor readings from datalogger abstraction."""
-    sensors = get_sensor_data_service().get_latest()
+    service = get_sensor_data_service()
+    sensors = service.get_latest()
     return {
         "sensors": sensors,
+        "simulation_enabled": service.is_simulation_enabled(),
         "timestamp": datetime.now().isoformat()
     }
 
@@ -189,7 +191,8 @@ async def sensors_latest():
 @app.get("/api/sensors/history")
 async def sensors_history(limit: int = 120, interval_minutes: int = 1, hours: int = 24):
     """Get recent sensor reading history for graph plotting."""
-    history = get_sensor_data_service().get_history(
+    service = get_sensor_data_service()
+    history = service.get_history(
         limit=limit,
         interval_minutes=interval_minutes,
         hours=hours,
@@ -199,6 +202,29 @@ async def sensors_history(limit: int = 120, interval_minutes: int = 1, hours: in
         "count": len(history),
         "interval_minutes": interval_minutes,
         "hours": hours,
+        "simulation_enabled": service.is_simulation_enabled(),
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.get("/api/sensors/simulation")
+async def sensors_simulation_state():
+    """Get current simulation mode for sensor sampling."""
+    service = get_sensor_data_service()
+    return {
+        "enabled": service.is_simulation_enabled(),
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.post("/api/sensors/simulation")
+async def sensors_simulation_set(payload: dict):
+    """Set simulation mode (true: simulated data, false: read from datalogger)."""
+    service = get_sensor_data_service()
+    enabled = bool(payload.get("enabled", False))
+    service.set_simulation_enabled(enabled)
+    return {
+        "enabled": service.is_simulation_enabled(),
         "timestamp": datetime.now().isoformat()
     }
 

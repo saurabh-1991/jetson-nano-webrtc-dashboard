@@ -2,6 +2,7 @@
 
 import logging
 import math
+import os
 import time
 from collections import deque
 from datetime import datetime, timedelta
@@ -26,6 +27,9 @@ class SensorDataService:
         self._last_sample_ts = 0.0
         self._sample_interval_seconds = 2.0
         self._client = None
+        self._simulation_enabled = os.getenv("SENSOR_SIMULATION_ENABLED", "true").lower() in (
+            "1", "true", "yes", "on"
+        )
         self._modbus_enabled = MODBUS_CONFIG.get("enabled", True) and MODBUS_LIB_AVAILABLE
 
         if MODBUS_CONFIG.get("enabled", True) and not MODBUS_LIB_AVAILABLE:
@@ -118,9 +122,14 @@ class SensorDataService:
 
     def _sample_once(self) -> dict:
         now = time.time()
-        logger_data = self._read_from_datalogger()
+        logger_data = None
+        if not self._simulation_enabled:
+            logger_data = self._read_from_datalogger()
 
-        if logger_data is not None:
+        if self._simulation_enabled:
+            sample = self._fallback_sample(now)
+            sample["source"] = "simulation"
+        elif logger_data is not None:
             sample = {
                 "hot_zone_temperature": float(logger_data.get("hot_zone_temperature", 0.0)),
                 "cold_zone_temperature": float(logger_data.get("cold_zone_temperature", 0.0)),
@@ -129,11 +138,23 @@ class SensorDataService:
                 "source": "modbus",
             }
         else:
-            sample = self._fallback_sample(now)
+            sample = {
+                "hot_zone_temperature": None,
+                "cold_zone_temperature": None,
+                "exhaust_temp": None,
+                "timestamp": datetime.now().isoformat(),
+                "source": "modbus_unavailable",
+            }
 
         self._history.append(sample)
         self._last_sample_ts = now
         return sample
+
+    def set_simulation_enabled(self, enabled: bool):
+        self._simulation_enabled = bool(enabled)
+
+    def is_simulation_enabled(self) -> bool:
+        return bool(self._simulation_enabled)
 
     @staticmethod
     def _parse_timestamp(value):

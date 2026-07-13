@@ -69,6 +69,21 @@
   color: #475569;
 }
 
+.simulation-toggle-row {
+  margin-bottom: 0.45rem;
+}
+
+.simulation-note {
+  margin-bottom: 0.6rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
 .graph-controls {
   display: flex;
   justify-content: space-between;
@@ -178,6 +193,24 @@
 .axis-line {
   stroke: #94a3b8;
   stroke-width: 1;
+}
+
+.grid-line {
+  stroke: #cbd5e1;
+  stroke-width: 0.8;
+  stroke-dasharray: 3 3;
+}
+
+.axis-text {
+  fill: #475569;
+  font-size: 7.5px;
+  font-weight: 600;
+}
+
+.y-axis-text {
+  paint-order: stroke;
+  stroke: #f8fafc;
+  stroke-width: 1.4;
 }
 
 .graph-empty {

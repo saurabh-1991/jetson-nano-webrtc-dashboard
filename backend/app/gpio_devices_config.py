@@ -37,13 +37,25 @@ GPIO_INPUTS_DEFAULT = {
         "label": "Flame",
         "pin": 22,
         "env": "GPIO_FLAME_INPUT_PIN",
+        "active_low": False,
+        "active_low_env": "GPIO_FLAME_ACTIVE_LOW",
     },
     "burner_trip": {
         "label": "Burner Trip",
         "pin": 24,
         "env": "GPIO_BURNER_TRIP_INPUT_PIN",
+        "active_low": True,
+        "active_low_env": "GPIO_BURNER_TRIP_ACTIVE_LOW",
     },
 }
+
+
+def _parse_bool(default_value: bool, env_name: str) -> bool:
+    raw = os.getenv(env_name)
+    if raw is None or str(raw).strip() == "":
+        return bool(default_value)
+
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _parse_pin(name: str, default_pin: int, env_name: str) -> int:
@@ -93,6 +105,7 @@ def get_gpio_inputs_config() -> dict:
         config[name] = {
             "label": item["label"],
             "pin": pin,
+            "active_low": _parse_bool(item.get("active_low", False), item.get("active_low_env", "")),
         }
 
     _warn_pin_conflicts(config)

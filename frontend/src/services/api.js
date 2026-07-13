@@ -42,6 +42,8 @@ export const sensorAPI = {
   getLatest: () => api.get('/sensors/latest'),
   getHistory: ({ limit = 120, intervalMinutes = 1, hours = 24 } = {}) =>
     api.get(`/sensors/history?limit=${limit}&interval_minutes=${intervalMinutes}&hours=${hours}`),
+  getSimulationMode: () => api.get('/sensors/simulation'),
+  setSimulationMode: (enabled) => api.post('/sensors/simulation', { enabled }),
 }
 
 // WebRTC endpoints

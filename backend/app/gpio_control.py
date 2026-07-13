@@ -88,6 +88,7 @@ class GPIOController:
             input_signals[name] = {
                 "label": cfg["label"],
                 "pin": cfg["pin"],
+                "active_low": bool(cfg.get("active_low", False)),
                 "signal": signal_on,
             }
 
@@ -115,7 +116,9 @@ class GPIOController:
 
         try:
             pin = self.inputs_config[input_name]["pin"]
-            return bool(GPIO.input(pin) == GPIO.HIGH)
+            raw_high = bool(GPIO.input(pin) == GPIO.HIGH)
+            active_low = bool(self.inputs_config[input_name].get("active_low", False))
+            return (not raw_high) if active_low else raw_high
         except Exception as e:
             logger.error("Failed to read GPIO input %s: %s", input_name, e)
             return False

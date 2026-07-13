@@ -96,6 +96,8 @@ export const SensorDataSection = () => {
   const [history, setHistory] = useState([])
   const [realtimeHistory, setRealtimeHistory] = useState([])
   const [isRealtimeMode, setIsRealtimeMode] = useState(true)
+  const [isSimulationEnabled, setIsSimulationEnabled] = useState(true)
+  const [isUpdatingSimulation, setIsUpdatingSimulation] = useState(false)
   const [activeTab, setActiveTab] = useState(SERIES[0].key)
   const [historyIntervalMinutes, setHistoryIntervalMinutes] = useState(5)
   const [historyHours, setHistoryHours] = useState(24)
@@ -116,6 +118,9 @@ export const SensorDataSection = () => {
 
         setLatest(latestSensors)
         setLastUpdated(latestTimestamp)
+        if (typeof latestResponse.data?.simulation_enabled === 'boolean') {
+          setIsSimulationEnabled(latestResponse.data.simulation_enabled)
+        }
 
         if (latestSensors) {
           setRealtimeHistory((prev) => {
@@ -181,10 +186,55 @@ export const SensorDataSection = () => {
     [displayedHistory]
   )
 
+  const yTicks = useMemo(() => {
+    const steps = 5
+    const range = chartMeta.maxY - chartMeta.minY
+    if (!Number.isFinite(range) || range <= 0) return []
+
+    const ticks = []
+    for (let i = 0; i <= steps; i += 1) {
+      const ratio = i / steps
+      const value = chartMeta.maxY - ratio * range
+      const y = ratio * graphHeight
+      ticks.push({ y, label: `${value.toFixed(1)}°C` })
+    }
+    return ticks
+  }, [chartMeta.maxY, chartMeta.minY])
+
+  const handleSimulationToggle = async () => {
+    const target = !isSimulationEnabled
+    try {
+      setIsUpdatingSimulation(true)
+      await sensorAPI.setSimulationMode(target)
+      setIsSimulationEnabled(target)
+      setError(null)
+    } catch (err) {
+      console.error('Failed to update simulation mode:', err)
+      setError('Unable to switch simulation mode')
+    } finally {
+      setIsUpdatingSimulation(false)
+    }
+  }
+
   return (
     <div className="sensor-row-grid">
       <section className="sensor-card reading-card">
         <h2>Sensor Data Reading</h2>
+
+        <div className="simulation-toggle-row">
+          <ToggleSwitch
+            label="Simulation"
+            isOn={isSimulationEnabled}
+            handleToggle={handleSimulationToggle}
+            disabled={isUpdatingSimulation}
+          />
+        </div>
+
+        {isSimulationEnabled && (
+          <div className="simulation-note">
+            Demo note: Simulated data is shown for demonstration and is not actual datalogger data.
+          </div>
+        )}
 
         <div className="reading-list">
           {SERIES.map((series) => (
@@ -275,6 +325,21 @@ export const SensorDataSection = () => {
           ) : (
             <>
               <svg viewBox={`0 0 ${graphWidth} ${graphHeight}`} className="sensor-graph" preserveAspectRatio="none">
+                {yTicks.map((tick, idx) => (
+                  <g key={`y-tick-${idx}`}>
+                    <line
+                      x1={graphLeftPad}
+                      y1={tick.y}
+                      x2={graphWidth - graphRightPad}
+                      y2={tick.y}
+                      className="grid-line"
+                    />
+                    <text x={graphLeftPad + 2} y={Math.max(10, tick.y - 2)} className="axis-text y-axis-text">
+                      {tick.label}
+                    </text>
+                  </g>
+                ))}
+
                 <line x1={graphLeftPad} y1={graphHeight} x2={graphWidth - graphRightPad} y2={graphHeight} className="axis-line" />
 
                 <polyline
@@ -304,7 +369,7 @@ export const SensorDataSection = () => {
               </svg>
 
               <div className="graph-axis-x">
-                <span className="axis-title">X-Axis: Time (30 min ticks, day/date)</span>
+                <span className="axis-title">X-Axis: Time (mins/hr, 30 min ticks with day/date)</span>
                 <div className="axis-ticks">
                   {timeTicks.map((tick, idx) => (
                     <span key={`${tick.timeLabel}-${tick.dateLabel}-${idx}`} className="axis-tick">
@@ -316,7 +381,7 @@ export const SensorDataSection = () => {
               </div>
 
               <div className="graph-axis-y">
-                Y-Axis: Reading ({activeSeries.label})
+                Y-Axis: Temperature (°C) — {activeSeries.label}
               </div>
             </>
           )}
