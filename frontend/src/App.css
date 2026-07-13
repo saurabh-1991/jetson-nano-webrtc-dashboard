@@ -46,7 +46,7 @@ body {
 .app-header {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
-  padding: 2rem;
+  padding: 1.25rem 1.5rem;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
@@ -57,13 +57,13 @@ body {
 }
 
 .app-header h1 {
-  font-size: 2.5rem;
-  margin-bottom: 0.5rem;
+  font-size: 2rem;
+  margin-bottom: 0.35rem;
   font-weight: 700;
 }
 
 .subtitle {
-  font-size: 1.1rem;
+  font-size: 1rem;
   opacity: 0.95;
   font-weight: 300;
 }
@@ -73,13 +73,13 @@ body {
   max-width: 1400px;
   width: 100%;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 1.1rem;
 }
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-  gap: 2rem;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 1rem;
 }
 
 .dashboard-section {
@@ -96,6 +96,14 @@ body {
 
 .dashboard-section.full-width {
   grid-column: 1 / -1;
+}
+
+.dashboard-section.controls-panel {
+  grid-column: 1 / span 8;
+}
+
+.dashboard-section.status-panel {
+  grid-column: 9 / span 4;
 }
 
 .app-footer {
@@ -125,11 +133,16 @@ body {
   .dashboard-section.full-width {
     grid-column: 1;
   }
+
+  .dashboard-section.controls-panel,
+  .dashboard-section.status-panel {
+    grid-column: 1;
+  }
 }
 
 @media (max-width: 768px) {
   .app-header {
-    padding: 1.5rem;
+    padding: 1rem;
   }
 
   .app-header h1 {
@@ -141,7 +154,7 @@ body {
   }
 
   .app-main {
-    padding: 1rem;
+    padding: 0.85rem;
   }
 
   .dashboard-grid {

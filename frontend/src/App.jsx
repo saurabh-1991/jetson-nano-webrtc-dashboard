@@ -23,12 +23,12 @@ function App() {
           </section>
 
           {/* GPIO Controls Section */}
-          <section className="dashboard-section full-width">
+          <section className="dashboard-section controls-panel">
             <GPIOControls />
           </section>
 
           {/* Device Status Section */}
-          <section className="dashboard-section full-width">
+          <section className="dashboard-section status-panel">
             <DeviceStatus />
           </section>
         </div>
