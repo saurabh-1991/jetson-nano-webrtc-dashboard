@@ -123,6 +123,17 @@ docker-compose up -d --build
 docker-compose ps
 ```
 
+### Step A (fast path) — Run existing images without rebuild
+
+Use this when images are already built on the Jetson and you only want to start/recreate containers.
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+docker-compose down --remove-orphans
+docker-compose up -d
+docker-compose ps
+```
+
 ### Step B — Validate stack
 
 ```bash
