@@ -62,59 +62,6 @@ export const DeviceStatus = () => {
             </div>
           </div>
         )}
-
-        {/* CUDA Status */}
-        {status?.cuda && (
-          <div className="status-card">
-            <div className="card-title">CUDA</div>
-            <div className="card-content">
-              <div className="status-item">
-                <span className="label">Available:</span>
-                <span className={`value ${status.cuda.cuda_available ? 'active' : 'inactive'}`}>
-                  {status.cuda.cuda_available ? 'Yes' : 'No'}
-                </span>
-              </div>
-              <div className="status-item">
-                <span className="label">Devices:</span>
-                <span className="value">{status.cuda.cuda_device_count || 0}</span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* GPIO Status */}
-        {status?.gpio && (
-          <div className="status-card">
-            <div className="card-title">GPIO</div>
-            <div className="card-content">
-              <div className="status-item">
-                <span className="label">LED:</span>
-                <span className={`value ${status.gpio.led_on ? 'active' : 'inactive'}`}>
-                  {status.gpio.led_on ? 'ON' : 'OFF'}
-                </span>
-              </div>
-              <div className="status-item">
-                <span className="label">Available:</span>
-                <span className={`value ${status.gpio.gpio_available ? 'active' : 'inactive'}`}>
-                  {status.gpio.gpio_available ? 'Yes' : 'No'}
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* WebSocket Connections */}
-        {typeof status?.websocket_connections !== 'undefined' && (
-          <div className="status-card">
-            <div className="card-title">WebSocket</div>
-            <div className="card-content">
-              <div className="status-item">
-                <span className="label">Connections:</span>
-                <span className="value">{status.websocket_connections}</span>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
       {status?.timestamp && (

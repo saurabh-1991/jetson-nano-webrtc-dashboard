@@ -292,14 +292,66 @@ async def gpio_status():
     """Get GPIO status"""
     gpio = get_gpio_controller()
     return {
-        "gpio": gpio.get_led_state(),
+        "gpio": gpio.get_outputs_state(),
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.get("/api/gpio/outputs")
+async def gpio_outputs_status():
+    """Get all configured GPIO outputs and current states."""
+    gpio = get_gpio_controller()
+    return {
+        "gpio": gpio.get_outputs_state(),
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.post("/api/gpio/outputs/{output_name}/on")
+async def gpio_output_on(output_name: str):
+    """Turn a named GPIO output on."""
+    gpio = get_gpio_controller()
+    result = gpio.turn_output_on(output_name)
+
+    return {
+        "success": result,
+        "output": output_name,
+        "gpio": gpio.get_outputs_state(),
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.post("/api/gpio/outputs/{output_name}/off")
+async def gpio_output_off(output_name: str):
+    """Turn a named GPIO output off."""
+    gpio = get_gpio_controller()
+    result = gpio.turn_output_off(output_name)
+
+    return {
+        "success": result,
+        "output": output_name,
+        "gpio": gpio.get_outputs_state(),
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.post("/api/gpio/outputs/{output_name}/toggle")
+async def gpio_output_toggle(output_name: str):
+    """Toggle a named GPIO output."""
+    gpio = get_gpio_controller()
+    result = gpio.toggle_output(output_name)
+
+    return {
+        "success": result,
+        "output": output_name,
+        "gpio": gpio.get_outputs_state(),
         "timestamp": datetime.now().isoformat()
     }
 
 
 @app.post("/api/gpio/on")
 async def gpio_on():
-    """Turn LED on"""
+    """Legacy endpoint: maps to Exhaust Blower ON."""
     gpio = get_gpio_controller()
     result = gpio.led_on()
     
@@ -312,7 +364,7 @@ async def gpio_on():
 
 @app.post("/api/gpio/off")
 async def gpio_off():
-    """Turn LED off"""
+    """Legacy endpoint: maps to Exhaust Blower OFF."""
     gpio = get_gpio_controller()
     result = gpio.led_off()
     
@@ -325,7 +377,7 @@ async def gpio_off():
 
 @app.post("/api/gpio/toggle")
 async def gpio_toggle():
-    """Toggle LED"""
+    """Legacy endpoint: maps to Exhaust Blower toggle."""
     gpio = get_gpio_controller()
     result = gpio.toggle_led()
     

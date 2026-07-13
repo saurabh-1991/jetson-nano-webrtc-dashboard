@@ -115,8 +115,8 @@ async def process_websocket_message(websocket: WebSocket, message: dict):
 
         elif message_type == "gpio_on":
             gpio = get_gpio_controller()
-            gpio.led_on()
-            state = gpio.get_led_state()
+            gpio.turn_output_on("exhaust_blower")
+            state = gpio.get_outputs_state()
             await manager.broadcast({
                 "type": "gpio_state_changed",
                 "data": state
@@ -124,8 +124,8 @@ async def process_websocket_message(websocket: WebSocket, message: dict):
 
         elif message_type == "gpio_off":
             gpio = get_gpio_controller()
-            gpio.led_off()
-            state = gpio.get_led_state()
+            gpio.turn_output_off("exhaust_blower")
+            state = gpio.get_outputs_state()
             await manager.broadcast({
                 "type": "gpio_state_changed",
                 "data": state
@@ -151,7 +151,7 @@ def get_device_status() -> dict:
             "is_open": camera.is_open if camera else False,
             "frame_count": camera.get_frame_count() if camera else 0
         },
-        "gpio": gpio.get_led_state(),
+        "gpio": gpio.get_outputs_state(),
         "cuda": cuda_info,
         "websocket_connections": get_ws_manager().get_connection_count(),
         "timestamp": None  # Will be set by the API

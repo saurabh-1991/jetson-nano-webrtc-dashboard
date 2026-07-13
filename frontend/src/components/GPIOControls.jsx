@@ -3,12 +3,17 @@ import { gpioAPI } from '../services/api'
 import './GPIOControls.css'
 
 export const GPIOControls = () => {
-  const [ledState, setLedState] = useState(false)
+  const OUTPUTS = [
+    { key: 'exhaust_blower', label: 'Exhaust Blower' },
+    { key: 'air_mixer_blower', label: 'Air Mixer Blower' },
+    { key: 'lpg_burner', label: 'LPG Burner' },
+  ]
+
+  const [outputsState, setOutputsState] = useState({})
   const [gpioAvailable, setGpioAvailable] = useState(true)
-  const [isLoading, setIsLoading] = useState(false)
+  const [loadingOutput, setLoadingOutput] = useState(null)
   const [error, setError] = useState(null)
 
-  // Keep GPIO state synchronized with backend status
   useEffect(() => {
     fetchGPIOStatus()
 
@@ -19,111 +24,91 @@ export const GPIOControls = () => {
 
   const fetchGPIOStatus = async () => {
     try {
-      const response = await gpioAPI.getStatus()
-      setLedState(response.data.gpio.led_on || false)
-      setGpioAvailable(response.data.gpio.gpio_available !== false)
+      const response = await gpioAPI.getOutputs()
+      const gpio = response.data.gpio || {}
+      setOutputsState(gpio.outputs || {})
+      setGpioAvailable(gpio.gpio_available !== false)
+      setError(null)
     } catch (err) {
       console.error('Failed to fetch GPIO status:', err)
+      setError('Failed to fetch controls status')
     }
   }
 
-  const handleLedOn = async () => {
-    setIsLoading(true)
+  const setOutputState = async (outputName, turnOn) => {
+    setLoadingOutput(outputName)
     setError(null)
-    try {
-      const response = await gpioAPI.turnOn()
-      if (!response.data.success) {
-        throw new Error('GPIO not available on backend runtime')
-      }
-      setLedState(response.data.gpio.led_on)
-      setGpioAvailable(response.data.gpio.gpio_available !== false)
-    } catch (err) {
-      setError('Failed to turn LED on')
-      console.error(err)
-      await fetchGPIOStatus()
-    } finally {
-      setIsLoading(false)
-    }
-  }
 
-  const handleLedOff = async () => {
-    setIsLoading(true)
-    setError(null)
     try {
-      const response = await gpioAPI.turnOff()
-      if (!response.data.success) {
-        throw new Error('GPIO not available on backend runtime')
-      }
-      setLedState(response.data.gpio.led_on)
-      setGpioAvailable(response.data.gpio.gpio_available !== false)
-    } catch (err) {
-      setError('Failed to turn LED off')
-      console.error(err)
-      await fetchGPIOStatus()
-    } finally {
-      setIsLoading(false)
-    }
-  }
+      const response = turnOn
+        ? await gpioAPI.turnOutputOn(outputName)
+        : await gpioAPI.turnOutputOff(outputName)
 
-  const handleToggle = async () => {
-    setIsLoading(true)
-    setError(null)
-    try {
-      const response = await gpioAPI.toggle()
       if (!response.data.success) {
         throw new Error('GPIO not available on backend runtime')
       }
-      setLedState(response.data.gpio.led_on)
-      setGpioAvailable(response.data.gpio.gpio_available !== false)
+
+      const gpio = response.data.gpio || {}
+      setOutputsState(gpio.outputs || {})
+      setGpioAvailable(gpio.gpio_available !== false)
     } catch (err) {
-      setError('Failed to toggle LED')
+      setError(`Failed to set ${outputName}`)
       console.error(err)
       await fetchGPIOStatus()
     } finally {
-      setIsLoading(false)
+      setLoadingOutput(null)
     }
   }
 
   return (
     <div className="gpio-controls-container">
-      <h2>GPIO Controls</h2>
+      <h2>Controls</h2>
 
-      <div className="gpio-status-display">
-        <div className="status-label">LED Status:</div>
-        <div className={`led-indicator ${ledState ? 'on' : 'off'}`}>
-          {ledState ? 'ON' : 'OFF'}
-        </div>
-      </div>
+      <div className="output-list">
+        {OUTPUTS.map((output) => {
+          const current = outputsState[output.key] || {}
+          const isOn = !!current.on
+          const pin = current.pin
+          const isLoading = loadingOutput === output.key
 
-      <div className="gpio-buttons">
-        <button
-          onClick={handleLedOn}
-          disabled={isLoading || ledState || !gpioAvailable}
-          className="btn btn-success"
-        >
-          {isLoading ? 'Loading...' : 'LED ON'}
-        </button>
+          return (
+            <div className="output-card" key={output.key}>
+              <div className="output-meta">
+                <div className="output-title">{output.label}</div>
+                <div className="output-subtitle">
+                  {typeof pin === 'number' ? `BOARD Pin ${pin}` : 'Pin not configured'}
+                </div>
+              </div>
 
-        <button
-          onClick={handleLedOff}
-          disabled={isLoading || !ledState || !gpioAvailable}
-          className="btn btn-danger"
-        >
-          {isLoading ? 'Loading...' : 'LED OFF'}
-        </button>
+              <div className="output-actions">
+                <span className={`state-pill ${isOn ? 'on' : 'off'}`}>
+                  {isOn ? 'ON' : 'OFF'}
+                </span>
 
-        <button
-          onClick={handleToggle}
-          disabled={isLoading || !gpioAvailable}
-          className="btn btn-warning"
-        >
-          {isLoading ? 'Loading...' : 'TOGGLE'}
-        </button>
+                <button
+                  onClick={() => setOutputState(output.key, true)}
+                  disabled={isLoading || isOn || !gpioAvailable}
+                  className="btn btn-success"
+                >
+                  {isLoading ? '...' : 'ON'}
+                </button>
+
+                <button
+                  onClick={() => setOutputState(output.key, false)}
+                  disabled={isLoading || !isOn || !gpioAvailable}
+                  className="btn btn-danger"
+                >
+                  {isLoading ? '...' : 'OFF'}
+                </button>
+              </div>
+            </div>
+          )
+        })}
       </div>
 
       {!gpioAvailable && (
         <div className="error-alert">
-          GPIO is unavailable in backend runtime. Hardware LED control is disabled.
+          GPIO is unavailable in backend runtime. Hardware controls are disabled.
         </div>
       )}
 

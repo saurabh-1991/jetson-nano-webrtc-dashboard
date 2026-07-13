@@ -9,7 +9,7 @@ function App() {
     <div className="app-container">
       <header className="app-header">
         <div className="header-content">
-          <h1>Jetson Nano Dashboard</h1>
+          <h1>Dashboard</h1>
           <p className="subtitle">Real-time Video Streaming & GPIO Control</p>
         </div>
       </header>
@@ -23,19 +23,19 @@ function App() {
           </section>
 
           {/* GPIO Controls Section */}
-          <section className="dashboard-section">
+          <section className="dashboard-section full-width">
             <GPIOControls />
           </section>
 
           {/* Device Status Section */}
-          <section className="dashboard-section">
+          <section className="dashboard-section full-width">
             <DeviceStatus />
           </section>
         </div>
       </main>
 
       <footer className="app-footer">
-        <p>Jetson Nano Dashboard v1.0.0 | Powered by FastAPI + React</p>
+        <p>Dashboard v1.0.0 | Powered by FastAPI + React</p>
       </footer>
     </div>
   )

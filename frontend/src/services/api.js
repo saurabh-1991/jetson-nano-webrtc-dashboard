@@ -19,6 +19,12 @@ export const cameraAPI = {
 // GPIO endpoints
 export const gpioAPI = {
   getStatus: () => api.get('/gpio/status'),
+  getOutputs: () => api.get('/gpio/outputs'),
+  turnOutputOn: (outputName) => api.post(`/gpio/outputs/${outputName}/on`),
+  turnOutputOff: (outputName) => api.post(`/gpio/outputs/${outputName}/off`),
+  toggleOutput: (outputName) => api.post(`/gpio/outputs/${outputName}/toggle`),
+
+  // Legacy compatibility helpers (mapped to exhaust blower in backend)
   turnOn: () => api.post('/gpio/on'),
   turnOff: () => api.post('/gpio/off'),
   toggle: () => api.post('/gpio/toggle'),
