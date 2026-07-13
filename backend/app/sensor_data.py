@@ -27,7 +27,7 @@ class SensorDataService:
         self._last_sample_ts = 0.0
         self._sample_interval_seconds = 2.0
         self._client = None
-        self._simulation_enabled = os.getenv("SENSOR_SIMULATION_ENABLED", "true").lower() in (
+        self._simulation_enabled = os.getenv("SENSOR_SIMULATION_ENABLED", "false").lower() in (
             "1", "true", "yes", "on"
         )
         self._modbus_enabled = MODBUS_CONFIG.get("enabled", True) and MODBUS_LIB_AVAILABLE

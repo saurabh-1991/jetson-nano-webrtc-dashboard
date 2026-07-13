@@ -85,10 +85,13 @@ export const SensorDataSection = () => {
         }
 
         if (latestSensors) {
-          setRealtimeHistory((prev) => {
-            const next = [...prev, latestSensors]
-            return next.slice(-180)
-          })
+          const hasAnyNumericValue = SERIES.some((series) => typeof latestSensors?.[series.key] === 'number')
+          if (hasAnyNumericValue) {
+            setRealtimeHistory((prev) => {
+              const next = [...prev, latestSensors]
+              return next.slice(-180)
+            })
+          }
         }
 
         if (!isRealtimeMode) {
@@ -119,10 +122,13 @@ export const SensorDataSection = () => {
 
   const displayedHistory = isRealtimeMode ? realtimeHistory : history
 
+  const numericSamples = useMemo(
+    () => displayedHistory.filter((item) => typeof item?.[activeTab] === 'number'),
+    [displayedHistory, activeTab]
+  )
+
   const chartMeta = useMemo(() => {
-    const values = displayedHistory
-      .map((item) => item?.[activeTab])
-      .filter((v) => typeof v === 'number')
+    const values = numericSamples.map((item) => item?.[activeTab])
 
     if (values.length === 0) {
       return { minY: 0, maxY: 100 }
@@ -136,7 +142,7 @@ export const SensorDataSection = () => {
       minY: minRaw - pad,
       maxY: maxRaw + pad,
     }
-  }, [displayedHistory, activeTab])
+  }, [numericSamples, activeTab])
 
   const activeSeries = SERIES.find((s) => s.key === activeTab) || SERIES[0]
   const graphWidth = 560
@@ -146,6 +152,13 @@ export const SensorDataSection = () => {
 
   const yTicks = useMemo(() => {
     const steps = 5
+    if (numericSamples.length === 0) {
+      return Array.from({ length: steps + 1 }, (_, i) => ({
+        y: (i / steps) * graphHeight,
+        label: 'NA',
+      }))
+    }
+
     const range = chartMeta.maxY - chartMeta.minY
     if (!Number.isFinite(range) || range <= 0) return []
 
@@ -157,7 +170,7 @@ export const SensorDataSection = () => {
       ticks.push({ y, label: `${value.toFixed(1)}°C` })
     }
     return ticks
-  }, [chartMeta.maxY, chartMeta.minY])
+  }, [chartMeta.maxY, chartMeta.minY, graphHeight, numericSamples.length])
 
   const handleSimulationToggle = async () => {
     const target = !isSimulationEnabled
@@ -165,6 +178,8 @@ export const SensorDataSection = () => {
       setIsUpdatingSimulation(true)
       await sensorAPI.setSimulationMode(target)
       setIsSimulationEnabled(target)
+      setRealtimeHistory([])
+      setHistory([])
       setError(null)
     } catch (err) {
       console.error('Failed to update simulation mode:', err)
@@ -305,7 +320,7 @@ export const SensorDataSection = () => {
                   stroke={activeSeries.color}
                   strokeWidth="3"
                   points={buildPolyline(
-                    displayedHistory,
+                    numericSamples,
                     activeSeries.key,
                     graphWidth,
                     graphHeight,
@@ -316,7 +331,7 @@ export const SensorDataSection = () => {
                   )}
                 />
 
-                {displayedHistory.length === 1 && (
+                {numericSamples.length === 1 && (
                   <circle
                     cx={graphWidth / 2}
                     cy={graphHeight / 2}
