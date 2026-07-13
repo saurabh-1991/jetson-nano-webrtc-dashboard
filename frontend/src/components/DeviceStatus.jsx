@@ -41,7 +41,7 @@ export const DeviceStatus = () => {
 
   return (
     <div className="device-status-container">
-      <h2>Device Status</h2>
+      <h2>Status / Indicator</h2>
 
       <div className="status-grid">
         {/* Camera Status */}
