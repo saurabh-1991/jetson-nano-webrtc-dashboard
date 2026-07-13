@@ -135,6 +135,27 @@ class SensorDataService:
         self._last_sample_ts = now
         return sample
 
+    @staticmethod
+    def _parse_timestamp(value):
+        if not value:
+            return None
+
+        # Python 3.7+ fast path
+        if hasattr(datetime, "fromisoformat"):
+            try:
+                return datetime.fromisoformat(value)
+            except Exception:
+                pass
+
+        # Python 3.6 fallback
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(value, fmt)
+            except Exception:
+                continue
+
+        return None
+
     def _ensure_recent_sample(self):
         now = time.time()
         if not self._history or (now - self._last_sample_ts) >= self._sample_interval_seconds:
@@ -155,9 +176,8 @@ class SensorDataService:
 
         filtered = []
         for sample in self._history:
-            try:
-                ts = datetime.fromisoformat(sample["timestamp"])
-            except Exception:
+            ts = self._parse_timestamp(sample.get("timestamp"))
+            if ts is None:
                 continue
             if ts >= cutoff:
                 filtered.append(sample)
@@ -168,12 +188,11 @@ class SensorDataService:
         bucket_seconds = safe_interval_minutes * 60
         bucketed = {}
         for sample in filtered:
-            try:
-                ts = datetime.fromisoformat(sample["timestamp"])
-                bucket_key = int(ts.timestamp()) // bucket_seconds
-                bucketed[bucket_key] = sample  # keep latest sample in bucket
-            except Exception:
+            ts = self._parse_timestamp(sample.get("timestamp"))
+            if ts is None:
                 continue
+            bucket_key = int(ts.timestamp()) // bucket_seconds
+            bucketed[bucket_key] = sample  # keep latest sample in bucket
 
         history = [bucketed[key] for key in sorted(bucketed.keys())]
         return history[-safe_limit:]
