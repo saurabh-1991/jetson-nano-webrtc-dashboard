@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { gpioAPI } from '../services/api'
+import ToggleSwitch from './ToggleSwitch'
 import './GPIOControls.css'
 
 export const GPIOControls = () => {
@@ -60,6 +61,11 @@ export const GPIOControls = () => {
     }
   }
 
+  const handleToggle = (outputName, currentState) => {
+    const nextState = !currentState
+    setOutputState(outputName, nextState)
+  }
+
   return (
     <div className="gpio-controls-container">
       <h2>Controls</h2>
@@ -85,21 +91,11 @@ export const GPIOControls = () => {
                   {isOn ? 'ON' : 'OFF'}
                 </span>
 
-                <button
-                  onClick={() => setOutputState(output.key, true)}
-                  disabled={isLoading || isOn || !gpioAvailable}
-                  className="btn btn-success"
-                >
-                  {isLoading ? '...' : 'ON'}
-                </button>
-
-                <button
-                  onClick={() => setOutputState(output.key, false)}
-                  disabled={isLoading || !isOn || !gpioAvailable}
-                  className="btn btn-danger"
-                >
-                  {isLoading ? '...' : 'OFF'}
-                </button>
+                <ToggleSwitch
+                  isOn={isOn}
+                  handleToggle={() => handleToggle(output.key, isOn)}
+                  disabled={isLoading || !gpioAvailable}
+                />
               </div>
             </div>
           )
