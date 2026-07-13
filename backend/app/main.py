@@ -17,6 +17,7 @@ from .camera import get_camera, check_cuda_availability
 from . import camera as camera_module
 from .gpio_control import get_gpio_controller
 from . import gpio_control as gpio_module
+from .sensor_data import get_sensor_data_service
 from .websocket import (
     handle_websocket_connection,
     get_device_status,
@@ -170,8 +171,30 @@ async def system_info():
 async def system_status():
     """Get complete system status"""
     status = get_device_status()
+    status["sensors"] = get_sensor_data_service().get_latest()
     status["timestamp"] = datetime.now().isoformat()
     return status
+
+
+@app.get("/api/sensors/latest")
+async def sensors_latest():
+    """Get latest sensor readings from datalogger abstraction."""
+    sensors = get_sensor_data_service().get_latest()
+    return {
+        "sensors": sensors,
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.get("/api/sensors/history")
+async def sensors_history(limit: int = 120):
+    """Get recent sensor reading history for graph plotting."""
+    history = get_sensor_data_service().get_history(limit=limit)
+    return {
+        "history": history,
+        "count": len(history),
+        "timestamp": datetime.now().isoformat()
+    }
 
 
 # ==================== CAMERA ENDPOINTS ====================

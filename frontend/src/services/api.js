@@ -37,6 +37,12 @@ export const systemAPI = {
   getStats: () => api.get('/stats'),
 }
 
+// Sensor data endpoints
+export const sensorAPI = {
+  getLatest: () => api.get('/sensors/latest'),
+  getHistory: (limit = 120) => api.get(`/sensors/history?limit=${limit}`),
+}
+
 // WebRTC endpoints
 export const webrtcAPI = {
   sendOffer: (offer) => api.post('/webrtc/offer', offer),

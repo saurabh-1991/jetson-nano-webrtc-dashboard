@@ -87,14 +87,6 @@ export const DeviceStatus = () => {
         )}
       </div>
 
-      {status?.timestamp && (
-        <div className="status-footer">
-          <span>Last updated: {new Date(status.timestamp).toLocaleTimeString()}</span>
-          <span className={`refresh-indicator ${isRefreshing ? 'active' : ''}`}>
-            {isRefreshing ? 'Updating…' : 'Live'}
-          </span>
-        </div>
-      )}
     </div>
   )
 }

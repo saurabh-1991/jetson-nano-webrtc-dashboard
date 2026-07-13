@@ -2,6 +2,7 @@ import React from 'react'
 import VideoStream from './components/VideoStream'
 import GPIOControls from './components/GPIOControls'
 import DeviceStatus from './components/DeviceStatus'
+import SensorDataSection from './components/SensorDataSection'
 import './App.css'
 
 function App() {
@@ -30,6 +31,11 @@ function App() {
           {/* Device Status Section */}
           <section className="dashboard-section status-panel">
             <DeviceStatus />
+          </section>
+
+          {/* Sensor Data + Graph Section */}
+          <section className="dashboard-section full-width">
+            <SensorDataSection />
           </section>
         </div>
       </main>
