@@ -53,44 +53,6 @@ function buildPolyline(history, key, width, height, minY, maxY, leftPad = 0, rig
     .join(' ')
 }
 
-function buildTimeTicks(history, width, leftPad = 0, rightPad = 0, tickMinutes = 30) {
-  if (!history || history.length < 2) return []
-
-  const plotWidth = Math.max(width - leftPad - rightPad, 1)
-  const firstTs = new Date(history[0].timestamp).getTime()
-  const lastTs = new Date(history[history.length - 1].timestamp).getTime()
-
-  if (!Number.isFinite(firstTs) || !Number.isFinite(lastTs) || lastTs <= firstTs) {
-    return []
-  }
-
-  const tickMs = tickMinutes * 60 * 1000
-  const start = Math.ceil(firstTs / tickMs) * tickMs
-  const ticks = []
-
-  for (let ts = start; ts <= lastTs; ts += tickMs) {
-    const ratio = (ts - firstTs) / (lastTs - firstTs)
-    const x = leftPad + ratio * plotWidth
-    const dt = new Date(ts)
-    ticks.push({
-      x,
-      timeLabel: dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      dateLabel: dt.toLocaleDateString([], { day: '2-digit', month: 'short' }),
-    })
-  }
-
-  if (ticks.length === 0) {
-    const dt = new Date(lastTs)
-    ticks.push({
-      x: leftPad + plotWidth,
-      timeLabel: dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      dateLabel: dt.toLocaleDateString([], { day: '2-digit', month: 'short' }),
-    })
-  }
-
-  return ticks
-}
-
 export const SensorDataSection = () => {
   const [latest, setLatest] = useState(null)
   const [history, setHistory] = useState([])
@@ -178,13 +140,9 @@ export const SensorDataSection = () => {
 
   const activeSeries = SERIES.find((s) => s.key === activeTab) || SERIES[0]
   const graphWidth = 560
-  const graphHeight = 180
+  const graphHeight = 240
   const graphLeftPad = 8
   const graphRightPad = 8
-  const timeTicks = useMemo(
-    () => buildTimeTicks(displayedHistory, graphWidth, graphLeftPad, graphRightPad, 30),
-    [displayedHistory]
-  )
 
   const yTicks = useMemo(() => {
     const steps = 5
@@ -368,21 +326,6 @@ export const SensorDataSection = () => {
                 )}
               </svg>
 
-              <div className="graph-axis-x">
-                <span className="axis-title">X-Axis: Time (mins/hr, 30 min ticks with day/date)</span>
-                <div className="axis-ticks">
-                  {timeTicks.map((tick, idx) => (
-                    <span key={`${tick.timeLabel}-${tick.dateLabel}-${idx}`} className="axis-tick">
-                      <span>{tick.timeLabel}</span>
-                      <small>{tick.dateLabel}</small>
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              <div className="graph-axis-y">
-                Y-Axis: Temperature (°C) — {activeSeries.label}
-              </div>
             </>
           )}
         </div>
