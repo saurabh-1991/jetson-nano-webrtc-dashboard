@@ -4,9 +4,12 @@ import './VideoStream.css'
 export const VideoStream = ({ apiBaseUrl = '' }) => {
   const videoRef = useRef(null)
   const imgRef = useRef(null)
+  const wrapperRef = useRef(null)
+  const popoutRef = useRef(null)
   const [isConnecting, setIsConnecting] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
   const [connectionState, setConnectionState] = useState('disconnected')
+  const [isFullscreen, setIsFullscreen] = useState(false)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
   const [streamMode, setStreamMode] = useState('none') // none | webrtc | mjpeg
@@ -150,6 +153,57 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
     setIsConnecting(false)
     setIsConnected(false)
     setConnectionState('disconnected')
+
+    if (popoutRef.current && !popoutRef.current.closed) {
+      popoutRef.current.close()
+      popoutRef.current = null
+    }
+  }
+
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement && wrapperRef.current) {
+        await wrapperRef.current.requestFullscreen()
+        setIsFullscreen(true)
+      } else if (document.fullscreenElement) {
+        await document.exitFullscreen()
+        setIsFullscreen(false)
+      }
+    } catch (err) {
+      console.error('Fullscreen toggle failed:', err)
+      setError('Unable to toggle fullscreen mode')
+    }
+  }
+
+  const openPopout = () => {
+    const baseUrl = getBaseUrl()
+    const popup = window.open('', 'jetson_camera_popout', 'width=1200,height=760,resizable=yes,scrollbars=no')
+    if (!popup) {
+      setError('Pop-out blocked by browser. Please allow pop-ups for this page.')
+      return
+    }
+
+    const streamUrl = `${baseUrl}/api/camera/stream?t=${Date.now()}`
+    popup.document.write(`
+      <!doctype html>
+      <html>
+      <head>
+        <title>Live Camera Pop-out</title>
+        <style>
+          html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+          .viewer { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+          img { width: 100%; height: 100%; object-fit: contain; }
+          .hint { position: fixed; top: 10px; left: 10px; color: #fff; background: rgba(0,0,0,.45); padding: 6px 10px; border-radius: 6px; font-family: Arial; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="hint">Live Camera (Pop-out)</div>
+        <div class="viewer"><img src="${streamUrl}" alt="Live Camera" /></div>
+      </body>
+      </html>
+    `)
+    popup.document.close()
+    popoutRef.current = popup
   }
 
   const onMjpegLoaded = () => {
@@ -166,14 +220,21 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
   }
 
   useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement))
+    }
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+
     return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange)
       disconnect()
     }
   }, [])
 
   return (
     <div className="video-stream-container">
-      <div className="video-wrapper">
+      <div className="video-wrapper" ref={wrapperRef}>
         {streamMode === 'mjpeg' ? (
           <img
             ref={imgRef}
@@ -232,6 +293,22 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
             Stop Stream
           </button>
         )}
+
+        <button
+          onClick={toggleFullscreen}
+          className="btn btn-secondary"
+          disabled={!isConnected}
+        >
+          {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+        </button>
+
+        <button
+          onClick={openPopout}
+          className="btn btn-secondary"
+          disabled={!isConnected}
+        >
+          Pop-out
+        </button>
       </div>
 
       <div className="video-status">

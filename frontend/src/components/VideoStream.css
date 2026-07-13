@@ -39,6 +39,7 @@
   display: flex;
   gap: 0.5rem;
   justify-content: center;
+  flex-wrap: wrap;
 }
 
 .btn {
@@ -73,6 +74,15 @@
 
 .btn-danger:hover:not(:disabled) {
   background: #c82333;
+}
+
+.btn-secondary {
+  background: #6c757d;
+  color: #fff;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #5a6268;
 }
 
 .video-status {
