@@ -121,6 +121,7 @@ export const SensorDataSection = () => {
   }, [historyIntervalMinutes, historyHours, isRealtimeMode])
 
   const displayedHistory = isRealtimeMode ? realtimeHistory : history
+  const hasLatestSample = !!lastUpdated
 
   const numericSamples = useMemo(
     () => displayedHistory.filter((item) => typeof item?.[activeTab] === 'number'),
@@ -293,7 +294,7 @@ export const SensorDataSection = () => {
         </div>
 
         <div className="graph-wrapper">
-          {displayedHistory.length === 0 ? (
+          {displayedHistory.length === 0 && !hasLatestSample ? (
             <div className="graph-empty">Waiting for sensor samples…</div>
           ) : (
             <>
