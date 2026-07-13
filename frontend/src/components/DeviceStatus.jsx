@@ -62,6 +62,29 @@ export const DeviceStatus = () => {
             </div>
           </div>
         )}
+
+        {/* Input Signal Indicators */}
+        {status?.gpio?.inputs && (
+          <div className="status-card">
+            <div className="card-title">Input Signals</div>
+            <div className="card-content">
+              {Object.entries(status.gpio.inputs).map(([key, input]) => {
+                const signalOn = !!input?.signal
+                return (
+                  <div className="status-item" key={key}>
+                    <span className="label">{input?.label || key}</span>
+                    <span className="indicator-wrap">
+                      <span
+                        className={`input-led ${signalOn ? 'on' : 'off'}`}
+                        aria-label={`${input?.label || key} ${signalOn ? 'active' : 'inactive'}`}
+                      ></span>
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {status?.timestamp && (

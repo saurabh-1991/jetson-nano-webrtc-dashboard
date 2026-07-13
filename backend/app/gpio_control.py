@@ -1,7 +1,7 @@
 """GPIO Control for Jetson Nano"""
 
 import logging
-from .gpio_devices_config import get_gpio_outputs_config
+from .gpio_devices_config import get_gpio_outputs_config, get_gpio_inputs_config
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ class GPIOController:
     def __init__(self):
         global GPIO_AVAILABLE
         self.outputs_config = get_gpio_outputs_config()
+        self.inputs_config = get_gpio_inputs_config()
         self.output_states = {name: False for name in self.outputs_config.keys()}
         self.gpio_available = GPIO_AVAILABLE
         
@@ -29,6 +30,14 @@ class GPIOController:
                 GPIO.setmode(GPIO.BOARD)
                 for output in self.outputs_config.values():
                     GPIO.setup(output["pin"], GPIO.OUT, initial=GPIO.LOW)
+
+                for input_cfg in self.inputs_config.values():
+                    try:
+                        GPIO.setup(input_cfg["pin"], GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+                    except TypeError:
+                        # Compatibility fallback for builds without pull_up_down support.
+                        GPIO.setup(input_cfg["pin"], GPIO.IN)
+
                 logger.info("GPIO initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize GPIO: {e}")
@@ -72,6 +81,16 @@ class GPIOController:
 
     def get_outputs_state(self) -> dict:
         """Get current runtime GPIO state for all outputs."""
+        input_signals = {}
+
+        for name, cfg in self.inputs_config.items():
+            signal_on = self.read_input_signal(name)
+            input_signals[name] = {
+                "label": cfg["label"],
+                "pin": cfg["pin"],
+                "signal": signal_on,
+            }
+
         return {
             "gpio_available": self.gpio_available,
             "outputs": {
@@ -81,8 +100,25 @@ class GPIOController:
                     "on": self.output_states.get(name, False),
                 }
                 for name, cfg in self.outputs_config.items()
-            }
+            },
+            "inputs": input_signals,
         }
+
+    def read_input_signal(self, input_name: str) -> bool:
+        """Read a named digital input signal from GPIO."""
+        if input_name not in self.inputs_config:
+            logger.warning("Unknown GPIO input requested: %s", input_name)
+            return False
+
+        if not self.gpio_available:
+            return False
+
+        try:
+            pin = self.inputs_config[input_name]["pin"]
+            return bool(GPIO.input(pin) == GPIO.HIGH)
+        except Exception as e:
+            logger.error("Failed to read GPIO input %s: %s", input_name, e)
+            return False
 
     # -------- Legacy LED methods (kept for backward compatibility) --------
     def led_on(self) -> bool:

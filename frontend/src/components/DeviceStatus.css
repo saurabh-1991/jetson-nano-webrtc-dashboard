@@ -55,6 +55,32 @@
   font-size: 0.82rem;
 }
 
+.indicator-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+}
+
+.input-led {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  transition: all 0.2s ease;
+}
+
+.input-led.on {
+  background: #2ecc71;
+  box-shadow: 0 0 8px rgba(46, 204, 113, 0.6);
+}
+
+.input-led.off {
+  background: #9ca3af;
+  box-shadow: none;
+}
+
 .label {
   color: #666;
   font-weight: 500;

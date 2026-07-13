@@ -4,6 +4,8 @@ Customize default BOARD pins here, or override each pin via environment variable
 - GPIO_EXHAUST_BLOWER_PIN
 - GPIO_AIR_MIXER_BLOWER_PIN
 - GPIO_LPG_BURNER_PIN
+- GPIO_FLAME_INPUT_PIN
+- GPIO_BURNER_TRIP_INPUT_PIN
 """
 
 import os
@@ -27,6 +29,19 @@ GPIO_OUTPUTS_DEFAULT = {
         "label": "LPG Burner",
         "pin": 18,
         "env": "GPIO_LPG_BURNER_PIN",
+    },
+}
+
+GPIO_INPUTS_DEFAULT = {
+    "flame": {
+        "label": "Flame",
+        "pin": 22,
+        "env": "GPIO_FLAME_INPUT_PIN",
+    },
+    "burner_trip": {
+        "label": "Burner Trip",
+        "pin": 24,
+        "env": "GPIO_BURNER_TRIP_INPUT_PIN",
     },
 }
 
@@ -64,6 +79,29 @@ def get_gpio_outputs_config() -> dict:
             "pin": pin,
         }
 
+    _warn_pin_conflicts(config)
+
+    return config
+
+
+def get_gpio_inputs_config() -> dict:
+    """Return runtime GPIO input config with env overrides applied."""
+    config = {}
+
+    for name, item in GPIO_INPUTS_DEFAULT.items():
+        pin = _parse_pin(name, item["pin"], item["env"])
+        config[name] = {
+            "label": item["label"],
+            "pin": pin,
+        }
+
+    _warn_pin_conflicts(config)
+
+    return config
+
+
+def _warn_pin_conflicts(config: dict):
+    """Warn if duplicate pins are configured in the provided logical map."""
     used_pins = {}
     for name, item in config.items():
         pin = item["pin"]
@@ -76,5 +114,3 @@ def get_gpio_outputs_config() -> dict:
             )
         else:
             used_pins[pin] = name
-
-    return config
