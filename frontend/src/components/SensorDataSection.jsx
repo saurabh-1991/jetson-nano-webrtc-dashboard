@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { sensorAPI } from '../services/api'
+import ToggleSwitch from './ToggleSwitch'
 import './SensorDataSection.css'
 
 const SERIES = [
@@ -93,6 +94,8 @@ function buildTimeTicks(history, width, leftPad = 0, rightPad = 0, tickMinutes =
 export const SensorDataSection = () => {
   const [latest, setLatest] = useState(null)
   const [history, setHistory] = useState([])
+  const [realtimeHistory, setRealtimeHistory] = useState([])
+  const [isRealtimeMode, setIsRealtimeMode] = useState(true)
   const [activeTab, setActiveTab] = useState(SERIES[0].key)
   const [historyIntervalMinutes, setHistoryIntervalMinutes] = useState(5)
   const [historyHours, setHistoryHours] = useState(24)
@@ -104,20 +107,32 @@ export const SensorDataSection = () => {
 
     const fetchSensorData = async () => {
       try {
-        const [latestResponse, historyResponse] = await Promise.all([
-          sensorAPI.getLatest(),
-          sensorAPI.getHistory({
-            limit: 500,
-            intervalMinutes: historyIntervalMinutes,
-            hours: historyHours,
-          }),
-        ])
+        const latestResponse = await sensorAPI.getLatest()
 
         if (!mounted) return
 
-        setLatest(latestResponse.data?.sensors || null)
-        setHistory(Array.isArray(historyResponse.data?.history) ? historyResponse.data.history : [])
-        setLastUpdated(latestResponse.data?.sensors?.timestamp || latestResponse.data?.timestamp || null)
+        const latestSensors = latestResponse.data?.sensors || null
+        const latestTimestamp = latestSensors?.timestamp || latestResponse.data?.timestamp || null
+
+        setLatest(latestSensors)
+        setLastUpdated(latestTimestamp)
+
+        if (latestSensors) {
+          setRealtimeHistory((prev) => {
+            const next = [...prev, latestSensors]
+            return next.slice(-180)
+          })
+        }
+
+        if (!isRealtimeMode) {
+          const historyResponse = await sensorAPI.getHistory({
+            limit: 500,
+            intervalMinutes: historyIntervalMinutes,
+            hours: historyHours,
+          })
+          setHistory(Array.isArray(historyResponse.data?.history) ? historyResponse.data.history : [])
+        }
+
         setError(null)
       } catch (err) {
         if (!mounted) return
@@ -133,10 +148,12 @@ export const SensorDataSection = () => {
       mounted = false
       clearInterval(interval)
     }
-  }, [historyIntervalMinutes, historyHours])
+  }, [historyIntervalMinutes, historyHours, isRealtimeMode])
+
+  const displayedHistory = isRealtimeMode ? realtimeHistory : history
 
   const chartMeta = useMemo(() => {
-    const values = history
+    const values = displayedHistory
       .map((item) => item?.[activeTab])
       .filter((v) => typeof v === 'number')
 
@@ -152,7 +169,7 @@ export const SensorDataSection = () => {
       minY: minRaw - pad,
       maxY: maxRaw + pad,
     }
-  }, [history, activeTab])
+  }, [displayedHistory, activeTab])
 
   const activeSeries = SERIES.find((s) => s.key === activeTab) || SERIES[0]
   const graphWidth = 560
@@ -160,8 +177,8 @@ export const SensorDataSection = () => {
   const graphLeftPad = 8
   const graphRightPad = 8
   const timeTicks = useMemo(
-    () => buildTimeTicks(history, graphWidth, graphLeftPad, graphRightPad, 30),
-    [history]
+    () => buildTimeTicks(displayedHistory, graphWidth, graphLeftPad, graphRightPad, 30),
+    [displayedHistory]
   )
 
   return (
@@ -189,6 +206,15 @@ export const SensorDataSection = () => {
         <h2>Graph</h2>
 
         <div className="graph-controls">
+          <div className="graph-mode-toggle">
+            <ToggleSwitch
+              label="Realtime"
+              isOn={isRealtimeMode}
+              handleToggle={() => setIsRealtimeMode((prev) => !prev)}
+            />
+            <span className="graph-mode-badge">{isRealtimeMode ? 'LIVE' : 'HISTORY'}</span>
+          </div>
+
           <div className="graph-tabs" role="tablist" aria-label="Sensor graph tabs">
             {SERIES.map((series) => (
               <button
@@ -205,31 +231,33 @@ export const SensorDataSection = () => {
             ))}
           </div>
 
-          <div className="history-filters">
-            <label>
-              Interval
-              <select
-                value={historyIntervalMinutes}
-                onChange={(e) => setHistoryIntervalMinutes(Number(e.target.value))}
-              >
-                {HISTORY_INTERVAL_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </label>
+          {!isRealtimeMode && (
+            <div className="history-filters">
+              <label>
+                Interval
+                <select
+                  value={historyIntervalMinutes}
+                  onChange={(e) => setHistoryIntervalMinutes(Number(e.target.value))}
+                >
+                  {HISTORY_INTERVAL_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </label>
 
-            <label>
-              Range
-              <select
-                value={historyHours}
-                onChange={(e) => setHistoryHours(Number(e.target.value))}
-              >
-                {HISTORY_RANGE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </label>
-          </div>
+              <label>
+                Range
+                <select
+                  value={historyHours}
+                  onChange={(e) => setHistoryHours(Number(e.target.value))}
+                >
+                  {HISTORY_RANGE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
         </div>
 
         <div className="graph-legend">
@@ -242,7 +270,7 @@ export const SensorDataSection = () => {
         </div>
 
         <div className="graph-wrapper">
-          {history.length < 2 ? (
+          {displayedHistory.length === 0 ? (
             <div className="graph-empty">Waiting for sensor samples…</div>
           ) : (
             <>
@@ -254,7 +282,7 @@ export const SensorDataSection = () => {
                   stroke={activeSeries.color}
                   strokeWidth="3"
                   points={buildPolyline(
-                    history,
+                    displayedHistory,
                     activeSeries.key,
                     graphWidth,
                     graphHeight,
@@ -264,6 +292,15 @@ export const SensorDataSection = () => {
                     graphRightPad,
                   )}
                 />
+
+                {displayedHistory.length === 1 && (
+                  <circle
+                    cx={graphWidth / 2}
+                    cy={graphHeight / 2}
+                    r="5"
+                    fill={activeSeries.color}
+                  />
+                )}
               </svg>
 
               <div className="graph-axis-x">
