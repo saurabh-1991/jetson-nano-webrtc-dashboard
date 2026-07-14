@@ -161,19 +161,75 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
   const openLargeView = () => {
     const baseUrl = getBaseUrl()
     const streamUrl = `${baseUrl}/api/camera/stream?t=${Date.now()}`
+    const dashboardUrl = window.location.href
 
     const popup = window.open(
-      streamUrl,
+      '',
       'jetson_camera_popout',
       'width=1280,height=840,resizable=yes,scrollbars=no,noopener,noreferrer'
     )
 
     if (!popup) {
       // Fallback: use same-tab navigation when pop-ups are blocked.
-      window.location.assign(streamUrl)
+      window.open(streamUrl, '_blank', 'noopener,noreferrer')
       return
     }
 
+    popup.document.write(`
+      <!doctype html>
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Live Camera - Large View</title>
+        <style>
+          html, body { margin: 0; width: 100%; height: 100%; background: #000; font-family: Arial, sans-serif; }
+          .toolbar {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            z-index: 10;
+            display: inline-flex;
+            gap: 8px;
+            background: rgba(0, 0, 0, 0.45);
+            padding: 8px;
+            border-radius: 8px;
+          }
+          .btn {
+            border: 1px solid rgba(255,255,255,0.25);
+            color: #fff;
+            background: rgba(17, 24, 39, 0.85);
+            border-radius: 6px;
+            padding: 6px 10px;
+            text-decoration: none;
+            font-size: 13px;
+            cursor: pointer;
+          }
+          .viewer {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+          img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="toolbar">
+          <a class="btn" href="${dashboardUrl}">← Back to Dashboard</a>
+          <button class="btn" onclick="window.close()">Close</button>
+        </div>
+        <div class="viewer">
+          <img src="${streamUrl}" alt="Live Camera Stream" />
+        </div>
+      </body>
+      </html>
+    `)
+    popup.document.close()
     popup.focus()
     popoutRef.current = popup
   }
