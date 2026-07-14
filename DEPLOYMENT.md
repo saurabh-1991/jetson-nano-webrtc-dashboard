@@ -289,6 +289,34 @@ Remote shell note:
 - If SSH to `.local` times out in your LAN stack, use IPv4 for SSH.
 - Keep `.local` for operator browser access.
 
+### Step A0.6 — Power-cycle simulation checklist (validated)
+
+Use this when you want to verify plug-and-play behavior before field deployment.
+
+On Jetson (simulate restart behavior):
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+docker-compose down --remove-orphans
+docker-compose up -d
+docker-compose ps
+curl -sS http://127.0.0.1:8000/health
+curl -sS http://127.0.0.1/api/system/status
+```
+
+From laptop/phone on same LAN (operator view):
+
+```bash
+curl -sS http://jetson-dashboard.local/
+curl -sS http://jetson-dashboard.local/api/system/status
+```
+
+Pass criteria:
+
+- backend health returns `{"status":"healthy",...}`
+- frontend and API proxy are reachable on `.local`
+- containers are `Up` in `docker-compose ps`
+
 ### Step A0.3 — Rollback to DHCP (if needed)
 
 If static IP causes connectivity problems:
