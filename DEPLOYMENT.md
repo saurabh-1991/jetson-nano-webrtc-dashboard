@@ -175,6 +175,69 @@ After setup, reboot once and use fixed URL:
 - `http://192.168.1.50/` (Ethernet example)
 - `http://192.168.1.60/` (Wi-Fi example)
 
+### Step A0.1 — Config file key reference (`scripts/powerrun.config`)
+
+| Key | Purpose | Example |
+| --- | --- | --- |
+| `AUTOLOGIN_USER` | Desktop autologin user | `root` / `saurabh` |
+| `ENABLE_AUTOLOGIN` | Enable LightDM autologin | `true` |
+| `ENABLE_ROOT_ACCOUNT` | If `true`, script sets root password | `false` |
+| `ROOT_PASSWORD` | Root password (required when enabling root account) | `ChangeMeNow!` |
+| `START_ON_BOOT` | Enable systemd service at boot | `true` |
+| `START_NOW` | Start service immediately during setup | `true` |
+| `ETH_DEVICE` | Ethernet interface | `eth0` |
+| `ETH_IP` | Static Ethernet IPv4 CIDR | `192.168.1.50/24` |
+| `ETH_GATEWAY` | Ethernet gateway | `192.168.1.1` |
+| `ETH_DNS` | Ethernet DNS list | `192.168.1.1,8.8.8.8` |
+| `WIFI_DEVICE` | Wi-Fi interface | `wlan0` |
+| `WIFI_SSID` | Wi-Fi SSID | `MyRouter` |
+| `WIFI_PASSWORD` | Wi-Fi password | `MyPass123` |
+| `WIFI_IP` | Static Wi-Fi IPv4 CIDR | `192.168.1.60/24` |
+| `WIFI_GATEWAY` | Wi-Fi gateway | `192.168.1.1` |
+| `WIFI_DNS` | Wi-Fi DNS list | `192.168.1.1,8.8.8.8` |
+
+### Step A0.2 — Post-reboot verification checklist
+
+Run on Jetson host:
+
+```bash
+systemctl status jetson-dashboard.service --no-pager
+docker-compose ps
+nmcli -p -f GENERAL.DEVICE,IP4.ADDRESS,IP4.GATEWAY device show eth0
+nmcli -p -f GENERAL.DEVICE,IP4.ADDRESS,IP4.GATEWAY device show wlan0
+curl -sS http://127.0.0.1:8000/health
+curl -sS http://127.0.0.1:8000/api/stats
+```
+
+Run from laptop/phone on same LAN:
+
+```bash
+curl -sS http://<STATIC_IP>/api/system/status
+curl -sS -o /tmp/frame.jpg -w "http=%{http_code} size=%{size_download}\n" http://<STATIC_IP>/api/camera/frame
+```
+
+### Step A0.3 — Rollback to DHCP (if needed)
+
+If static IP causes connectivity problems:
+
+```bash
+# Replace with actual active connection names if different
+nmcli connection show
+sudo nmcli connection modify "jetson-eth0-static" ipv4.method auto
+sudo nmcli connection up "jetson-eth0-static"
+
+# Optional Wi-Fi rollback
+sudo nmcli connection modify "jetson-wlan0-<SSID>" ipv4.method auto
+sudo nmcli connection up "jetson-wlan0-<SSID>"
+```
+
+If you need to stop boot auto-start temporarily:
+
+```bash
+sudo systemctl disable jetson-dashboard.service
+sudo systemctl stop jetson-dashboard.service
+```
+
 ### Step A (fast path) — Run existing images without rebuild
 
 Use this when images are already built on the Jetson and you only want to start/recreate containers.

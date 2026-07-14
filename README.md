@@ -85,6 +85,37 @@ JetsonNano/POC_Project_1/
 
 For detailed Jetson Nano deployment steps, including both Docker Compose and native installation, see `DEPLOYMENT.md`.
 
+## 🧭 Branch and release guidance
+
+- Stable deployment branch for latest plug-and-play flow: `poc_demo_v1.1.0`
+- Earlier deployment baseline: `poc_demo_v1.0.0`
+
+Recommended branch sync on Jetson:
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+git fetch origin
+git checkout -B poc_demo_v1.1.0 origin/poc_demo_v1.1.0
+git reset --hard origin/poc_demo_v1.1.0
+```
+
+## 🆕 What’s included in `poc_demo_v1.1.0`
+
+- Multi-viewer streaming stability improvements:
+  - shared frame/JPEG caching path for MJPEG efficiency
+  - session-based MJPEG viewer tracking for accurate live counts
+- Camera stop/release reliability:
+  - `POST /api/camera/stop` now supports per-session unregister
+  - idle watchdog auto-releases camera when no active viewers remain
+- Observability enhancements:
+  - `/api/stats` now includes active viewers and camera performance metrics
+  - camera UI displays live viewer and cache/encode badges
+- Power-run automation:
+  - `scripts/setup_powerrun_jetson.sh` (autologin + systemd startup)
+  - `scripts/configure_static_ip_nmcli.sh` (static Ethernet/Wi-Fi)
+  - `scripts/powerrun_apply_all.sh` (one-command orchestrator)
+  - `scripts/powerrun.config` (user-editable custom IP/boot config)
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -134,6 +165,60 @@ docker-compose up -d
 - Backend: `http://localhost:8000`
 - Frontend: `http://localhost:80`
 - API: `http://localhost:8000/api`
+
+## 🔌 Plug-and-play power-run setup (recommended on Jetson)
+
+If your requirement is:
+
+1. auto-login on boot,
+2. auto-start frontend+backend after power-on,
+3. fixed LAN IP for predictable URL,
+
+then use this flow.
+
+### Step 1 — Edit your board/network config once
+
+File: `scripts/powerrun.config`
+
+Main values to customize:
+
+- `AUTOLOGIN_USER`
+- `ENABLE_ROOT_ACCOUNT`, `ROOT_PASSWORD`
+- `ETH_IP`, `ETH_GATEWAY`, `ETH_DNS`
+- `WIFI_SSID`, `WIFI_PASSWORD`, `WIFI_IP`, `WIFI_GATEWAY`, `WIFI_DNS`
+
+### Step 2 — Apply all automation in one command
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+chmod +x scripts/powerrun_apply_all.sh scripts/setup_powerrun_jetson.sh scripts/configure_static_ip_nmcli.sh
+
+# Edit your custom values
+nano scripts/powerrun.config
+
+# Apply autologin + startup service + static IP
+sudo ./scripts/powerrun_apply_all.sh
+```
+
+### Step 3 — Reboot and validate
+
+```bash
+systemctl status jetson-dashboard.service --no-pager
+docker-compose ps
+curl http://127.0.0.1:8000/health
+```
+
+From another device on LAN, open:
+
+- `http://<YOUR_STATIC_IP>/`
+
+## 📈 Runtime metrics and endpoints
+
+Useful endpoints after deployment:
+
+- `GET /api/stats` — viewer counts + camera perf metrics
+- `GET /api/camera/info` — pipeline/runtime diagnostics
+- `POST /api/camera/stop` — explicit stop/release request (with optional `stream_session_id`)
 
 ## 📱 Features
 
