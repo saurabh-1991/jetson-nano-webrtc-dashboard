@@ -3,6 +3,14 @@
 This document consolidates the old and current deployment notes into one practical runbook.
 It is focused on Jetson Nano with JetPack 4.6 (L4T r32.7.1 / Python 3.6).
 
+## Beginner quick-start for a new local network
+
+If you are deploying this project in a **new LAN/router** for the first time, start here:
+
+- [Doc/new-local-network-deployment.md](Doc/new-local-network-deployment.md)
+
+That guide includes screenshots, copyable commands, and fallback steps for `.local` vs numeric IP access.
+
 ## 1) Executive summary (current reality)
 
 ### Verified working
