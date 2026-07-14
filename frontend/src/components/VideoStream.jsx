@@ -193,7 +193,10 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
             background: rgba(0, 0, 0, 0.45);
             padding: 8px;
             border-radius: 8px;
+            opacity: 1;
+            transition: opacity 0.2s ease;
           }
+          .toolbar.hidden { opacity: 0; pointer-events: none; }
           .btn {
             border: 1px solid rgba(255,255,255,0.25);
             color: #fff;
@@ -226,6 +229,32 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
         <div class="viewer">
           <img src="${streamUrl}" alt="Live Camera Stream" />
         </div>
+        <script>
+          (function () {
+            const toolbar = document.querySelector('.toolbar');
+            if (!toolbar) return;
+
+            let hideTimer = null;
+
+            function showToolbar() {
+              toolbar.classList.remove('hidden');
+              if (hideTimer) clearTimeout(hideTimer);
+              hideTimer = setTimeout(() => {
+                toolbar.classList.add('hidden');
+              }, 2500);
+            }
+
+            document.addEventListener('mousemove', showToolbar, { passive: true });
+            document.addEventListener('keydown', showToolbar);
+            toolbar.addEventListener('mouseenter', () => {
+              if (hideTimer) clearTimeout(hideTimer);
+              toolbar.classList.remove('hidden');
+            });
+            toolbar.addEventListener('mouseleave', showToolbar);
+
+            showToolbar();
+          })();
+        </script>
       </body>
       </html>
     `)
