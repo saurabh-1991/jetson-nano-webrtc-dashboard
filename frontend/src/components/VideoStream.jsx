@@ -4,13 +4,10 @@ import './VideoStream.css'
 export const VideoStream = ({ apiBaseUrl = '' }) => {
   const videoRef = useRef(null)
   const imgRef = useRef(null)
-  const wrapperRef = useRef(null)
   const popoutRef = useRef(null)
   const [isConnecting, setIsConnecting] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
   const [connectionState, setConnectionState] = useState('disconnected')
-  const [isFullscreen, setIsFullscreen] = useState(false)
-  const [popoutBlocked, setPopoutBlocked] = useState(false)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
   const [streamMode, setStreamMode] = useState('none') // none | webrtc | mjpeg
@@ -161,40 +158,7 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
     }
   }
 
-  const toggleFullscreen = async () => {
-    try {
-      const el = wrapperRef.current
-      if (!el) return
-
-      const requestFullscreen =
-        el.requestFullscreen ||
-        el.webkitRequestFullscreen ||
-        el.msRequestFullscreen
-
-      const exitFullscreen =
-        document.exitFullscreen ||
-        document.webkitExitFullscreen ||
-        document.msExitFullscreen
-
-      const fullscreenElement =
-        document.fullscreenElement ||
-        document.webkitFullscreenElement ||
-        document.msFullscreenElement
-
-      if (!fullscreenElement && requestFullscreen) {
-        await requestFullscreen.call(el)
-        setIsFullscreen(true)
-      } else if (fullscreenElement && exitFullscreen) {
-        await exitFullscreen.call(document)
-        setIsFullscreen(false)
-      }
-    } catch (err) {
-      console.error('Fullscreen toggle failed:', err)
-      setError('Unable to toggle fullscreen mode')
-    }
-  }
-
-  const openPopout = () => {
+  const openLargeView = () => {
     const baseUrl = getBaseUrl()
     const streamUrl = `${baseUrl}/api/camera/stream?t=${Date.now()}`
 
@@ -205,19 +169,13 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
     )
 
     if (!popup) {
-      setPopoutBlocked(true)
-      setError('Pop-out blocked by browser. Please allow pop-ups for this page.')
+      // Fallback: use same-tab navigation when pop-ups are blocked.
+      window.location.assign(streamUrl)
       return
     }
-    setPopoutBlocked(false)
+
     popup.focus()
     popoutRef.current = popup
-  }
-
-  const openStreamInTab = () => {
-    const baseUrl = getBaseUrl()
-    const streamUrl = `${baseUrl}/api/camera/stream?t=${Date.now()}`
-    window.open(streamUrl, '_blank', 'noopener,noreferrer')
   }
 
   const onMjpegLoaded = () => {
@@ -234,21 +192,14 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
   }
 
   useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement))
-    }
-
-    document.addEventListener('fullscreenchange', handleFullscreenChange)
-
     return () => {
-      document.removeEventListener('fullscreenchange', handleFullscreenChange)
       disconnect()
     }
   }, [])
 
   return (
     <div className="video-stream-container">
-      <div className="video-wrapper" ref={wrapperRef}>
+      <div className="video-wrapper">
         {streamMode === 'mjpeg' ? (
           <img
             ref={imgRef}
@@ -285,7 +236,7 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
               ? streamMode === 'mjpeg'
                 ? 'Loading MJPEG stream...'
                 : 'Connecting WebRTC...'
-              : 'Click "Start Stream" to begin'}
+              : 'Click "Start Video" to begin'}
           </div>
         )}
       </div>
@@ -297,39 +248,23 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
             disabled={isConnecting}
             className="btn btn-primary"
           >
-            {isConnecting ? 'Connecting...' : 'Start Stream'}
+            {isConnecting ? 'Connecting...' : 'Start Video'}
           </button>
         ) : (
           <button
             onClick={disconnect}
             className="btn btn-danger"
           >
-            Stop Stream
+            Stop Video
           </button>
         )}
 
         <button
-          onClick={toggleFullscreen}
+          onClick={openLargeView}
           className="btn btn-secondary"
         >
-          {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+          Open Large View
         </button>
-
-        <button
-          onClick={openPopout}
-          className="btn btn-secondary"
-        >
-          Pop-out
-        </button>
-
-        {popoutBlocked && (
-          <button
-            onClick={openStreamInTab}
-            className="btn btn-secondary"
-          >
-            Open Stream Tab
-          </button>
-        )}
       </div>
 
       <div className="video-status">
