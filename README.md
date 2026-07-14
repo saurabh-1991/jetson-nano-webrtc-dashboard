@@ -245,6 +245,41 @@ cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
 bash ./scripts/check_lan_access.sh
 ```
 
+### Remote connection in local LAN (recommended workflow)
+
+Use this sequence for remote/local deployments where Jetson IP may change after reboot.
+
+On Jetson (one-time setup), configure `scripts/powerrun.config`, then run:
+
+```bash
+sudo ./scripts/powerrun_apply_all.sh
+```
+
+After reboot, run:
+
+```bash
+bash ./scripts/check_lan_access.sh
+```
+
+Use the printed URLs from another laptop/phone on the same LAN:
+
+- Primary: `http://<hostname>.local/`
+- Fallback: `http://<ipv4>/`
+
+For remote shell, prefer SSH by IPv4 if `.local` SSH is blocked in your LAN stack.
+
+Quick checks from laptop:
+
+```bash
+curl -sS http://jetson-dashboard.local/api/system/status
+curl -sS http://<JETSON_IPV4>/api/system/status
+```
+
+Windows notes:
+
+- Install Bonjour services if `.local` resolution is missing.
+- In some networks, HTTP works via `.local` while SSH to `.local` may fail; in that case use IPv4 for SSH and keep `.local` for browser access.
+
 ## 📈 Runtime metrics and endpoints
 
 Useful endpoints after deployment:

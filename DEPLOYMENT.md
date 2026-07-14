@@ -241,6 +241,46 @@ Safety note: static-IP script now skips interface updates when the target NIC is
 (for example `eth0` unplugged while using Wi-Fi), so one-command remote setup won't fail
 just because an unused interface is down.
 
+### Step A0.5 — Remote connection steps in local environment (Jetson ↔ Laptop)
+
+Follow this exact flow for local-LAN remote access after power-on.
+
+On Jetson (one-time prep):
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+nano scripts/powerrun.config
+sudo ./scripts/powerrun_apply_all.sh
+sudo reboot
+```
+
+On Jetson (after reboot, local check):
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+bash ./scripts/check_lan_access.sh
+```
+
+On laptop/phone (same router/LAN):
+
+```bash
+# Preferred hostname access
+curl -sS http://jetson-dashboard.local/api/system/status
+
+# IPv4 fallback if .local resolution is unavailable
+curl -sS http://<JETSON_IPV4>/api/system/status
+```
+
+Open dashboard in browser:
+
+- `http://jetson-dashboard.local/` (preferred)
+- `http://<JETSON_IPV4>/` (fallback)
+
+Remote shell note:
+
+- If SSH to `.local` times out in your LAN stack, use IPv4 for SSH.
+- Keep `.local` for operator browser access.
+
 ### Step A0.3 — Rollback to DHCP (if needed)
 
 If static IP causes connectivity problems:
