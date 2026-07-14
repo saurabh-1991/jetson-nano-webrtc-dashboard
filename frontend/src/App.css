@@ -103,11 +103,11 @@ body {
 }
 
 .dashboard-section.controls-panel {
-  grid-column: 7 / span 6;
+  grid-column: 1 / span 6;
 }
 
 .dashboard-section.status-panel {
-  grid-column: 1 / span 6;
+  grid-column: 7 / span 6;
 }
 
 .app-footer {

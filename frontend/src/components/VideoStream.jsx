@@ -10,6 +10,7 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
   const [isConnected, setIsConnected] = useState(false)
   const [connectionState, setConnectionState] = useState('disconnected')
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [popoutBlocked, setPopoutBlocked] = useState(false)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
   const [streamMode, setStreamMode] = useState('none') // none | webrtc | mjpeg
@@ -204,11 +205,19 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
     )
 
     if (!popup) {
+      setPopoutBlocked(true)
       setError('Pop-out blocked by browser. Please allow pop-ups for this page.')
       return
     }
+    setPopoutBlocked(false)
     popup.focus()
     popoutRef.current = popup
+  }
+
+  const openStreamInTab = () => {
+    const baseUrl = getBaseUrl()
+    const streamUrl = `${baseUrl}/api/camera/stream?t=${Date.now()}`
+    window.open(streamUrl, '_blank', 'noopener,noreferrer')
   }
 
   const onMjpegLoaded = () => {
@@ -312,6 +321,15 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
         >
           Pop-out
         </button>
+
+        {popoutBlocked && (
+          <button
+            onClick={openStreamInTab}
+            className="btn btn-secondary"
+          >
+            Open Stream Tab
+          </button>
+        )}
       </div>
 
       <div className="video-status">
