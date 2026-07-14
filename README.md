@@ -194,6 +194,7 @@ Main values to customize:
 
 - `AUTOLOGIN_USER`
 - `ENABLE_ROOT_ACCOUNT`, `ROOT_PASSWORD`
+- `ENABLE_MDNS`, `MDNS_HOSTNAME`
 - `ETH_IP`, `ETH_GATEWAY`, `ETH_DNS`
 - `WIFI_SSID`, `WIFI_PASSWORD`, `WIFI_IP`, `WIFI_GATEWAY`, `WIFI_DNS`
 
@@ -221,6 +222,18 @@ curl http://127.0.0.1:8000/health
 From another device on LAN, open:
 
 - `http://<YOUR_STATIC_IP>/`
+- `http://<MDNS_HOSTNAME>.local/` (recommended when IP may change)
+
+### No-IP access in local LAN (recommended for remote sites)
+
+Power-run now enables mDNS by default, so clients can open a stable hostname instead of tracking DHCP IP changes:
+
+- Default URL: `http://jetson-dashboard.local/`
+- Change hostname in `scripts/powerrun.config`:
+  - `ENABLE_MDNS="true"`
+  - `MDNS_HOSTNAME="jetson-dashboard"`
+
+Windows note: if `.local` does not resolve, install Bonjour services (or use static IP fallback).
 
 ## 📈 Runtime metrics and endpoints
 

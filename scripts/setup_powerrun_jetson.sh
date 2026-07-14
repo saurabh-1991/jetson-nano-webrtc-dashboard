@@ -19,6 +19,8 @@ ENABLE_ROOT_ACCOUNT="${ENABLE_ROOT_ACCOUNT:-false}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-}"
 START_ON_BOOT="${START_ON_BOOT:-true}"
 START_NOW="${START_NOW:-true}"
+ENABLE_MDNS="${ENABLE_MDNS:-true}"
+MDNS_HOSTNAME="${MDNS_HOSTNAME:-jetson-dashboard}"
 
 SERVICE_FILE="/etc/systemd/system/jetson-dashboard.service"
 LIGHTDM_FILE="/etc/lightdm/lightdm.conf.d/90-jetson-dashboard-autologin.conf"
@@ -69,6 +71,43 @@ EOF
   echo "[OK] LightDM autologin configured for user '${AUTOLOGIN_USER}'"
 }
 
+configure_mdns_discovery() {
+  if [[ "$ENABLE_MDNS" != "true" ]]; then
+    echo "[INFO] mDNS discovery skipped (ENABLE_MDNS=false)"
+    return
+  fi
+
+  if ! command -v avahi-daemon >/dev/null 2>&1; then
+    echo "[INFO] Installing mDNS packages (avahi-daemon, libnss-mdns, avahi-utils)"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y
+    apt-get install -y avahi-daemon libnss-mdns avahi-utils
+  fi
+
+  if [[ -n "$MDNS_HOSTNAME" ]]; then
+    hostnamectl set-hostname "$MDNS_HOSTNAME"
+  fi
+
+  mkdir -p /etc/avahi/services
+  cat > /etc/avahi/services/jetson-dashboard-http.service <<EOF
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">%h</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>80</port>
+    <txt-record>path=/</txt-record>
+  </service>
+</service-group>
+EOF
+
+  systemctl enable avahi-daemon
+  systemctl restart avahi-daemon
+
+  echo "[OK] mDNS enabled. Try URL: http://${MDNS_HOSTNAME}.local/"
+}
+
 install_dashboard_service() {
   cat > "$SERVICE_FILE" <<EOF
 [Unit]
@@ -105,6 +144,7 @@ EOF
 
 enable_root_if_requested
 configure_lightdm_autologin
+configure_mdns_discovery
 install_dashboard_service
 
 echo ""

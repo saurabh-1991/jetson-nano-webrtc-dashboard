@@ -143,7 +143,7 @@ docker-compose ps
 This applies the power-run automation scripts introduced in `poc_demo_v1.1.0`.
 
 Before running, edit `scripts/powerrun.config` with your custom network values
-(`ETH_IP`, `ETH_GATEWAY`, `ETH_DNS`, and optional Wi-Fi values).
+(`ETH_IP`, `ETH_GATEWAY`, `ETH_DNS`, optional Wi-Fi values, and mDNS hostname keys).
 
 ```bash
 cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
@@ -174,6 +174,7 @@ After setup, reboot once and use fixed URL:
 
 - `http://192.168.1.50/` (Ethernet example)
 - `http://192.168.1.60/` (Wi-Fi example)
+- `http://jetson-dashboard.local/` (mDNS hostname, recommended for DHCP-changing networks)
 
 ### Step A0.1 — Config file key reference (`scripts/powerrun.config`)
 
@@ -185,6 +186,8 @@ After setup, reboot once and use fixed URL:
 | `ROOT_PASSWORD` | Root password (required when enabling root account) | `ChangeMeNow!` |
 | `START_ON_BOOT` | Enable systemd service at boot | `true` |
 | `START_NOW` | Start service immediately during setup | `true` |
+| `ENABLE_MDNS` | Enable Avahi/mDNS LAN discovery | `true` |
+| `MDNS_HOSTNAME` | Hostname exposed as `http://<name>.local/` | `jetson-dashboard` |
 | `ETH_DEVICE` | Ethernet interface | `eth0` |
 | `ETH_IP` | Static Ethernet IPv4 CIDR | `192.168.1.50/24` |
 | `ETH_GATEWAY` | Ethernet gateway | `192.168.1.1` |
@@ -207,6 +210,8 @@ nmcli -p -f GENERAL.DEVICE,IP4.ADDRESS,IP4.GATEWAY device show eth0
 nmcli -p -f GENERAL.DEVICE,IP4.ADDRESS,IP4.GATEWAY device show wlan0
 curl -sS http://127.0.0.1:8000/health
 curl -sS http://127.0.0.1:8000/api/stats
+systemctl status avahi-daemon --no-pager
+hostnamectl status --static
 ```
 
 Run from laptop/phone on same LAN:
@@ -214,7 +219,22 @@ Run from laptop/phone on same LAN:
 ```bash
 curl -sS http://<STATIC_IP>/api/system/status
 curl -sS -o /tmp/frame.jpg -w "http=%{http_code} size=%{size_download}\n" http://<STATIC_IP>/api/camera/frame
+# If mDNS is enabled
+curl -sS http://jetson-dashboard.local/api/system/status
 ```
+
+### Step A0.4 — LAN discovery strategy for remote/no-serial deployments
+
+When board IP may change after reboot (DHCP), use mDNS as the primary access method:
+
+1. Keep `ENABLE_MDNS="true"` in `scripts/powerrun.config`
+2. Set a stable `MDNS_HOSTNAME` (for example `jetson-dashboard`)
+3. Re-apply once: `sudo ./scripts/powerrun_apply_all.sh`
+4. Access from LAN using `http://<MDNS_HOSTNAME>.local/`
+
+This removes day-to-day dependency on knowing the numeric IP.
+
+Windows note: if `.local` does not resolve, install Bonjour services, or use static IP fallback.
 
 ### Step A0.3 — Rollback to DHCP (if needed)
 

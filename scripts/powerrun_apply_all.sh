@@ -28,6 +28,8 @@ ENABLE_ROOT_ACCOUNT="false"
 ROOT_PASSWORD=""
 START_ON_BOOT="true"
 START_NOW="true"
+ENABLE_MDNS="true"
+MDNS_HOSTNAME="jetson-dashboard"
 
 ETH_DEVICE="eth0"
 ETH_IP=""
@@ -54,6 +56,8 @@ Boot/service options:
   --root-password <password>
   --disable-start-on-boot         (default: enabled)
   --disable-start-now             (default: enabled)
+  --disable-mdns                  (default: enabled)
+  --mdns-hostname <hostname>      (default: jetson-dashboard)
 
 Ethernet static IPv4 options:
   --eth-device <dev>              (default: eth0)
@@ -122,13 +126,15 @@ while [[ $# -gt 0 ]]; do
       ;;
 
     --project-dir) PROJECT_DIR="$2"; shift 2 ;;
-  --config) CONFIG_FILE="$2"; shift 2 ;;
+    --config) CONFIG_FILE="$2"; shift 2 ;;
     --autologin-user) AUTOLOGIN_USER="$2"; shift 2 ;;
     --disable-autologin) ENABLE_AUTOLOGIN="false"; shift 1 ;;
     --enable-root-account) ENABLE_ROOT_ACCOUNT="true"; shift 1 ;;
     --root-password) ROOT_PASSWORD="$2"; shift 2 ;;
     --disable-start-on-boot) START_ON_BOOT="false"; shift 1 ;;
     --disable-start-now) START_NOW="false"; shift 1 ;;
+    --disable-mdns) ENABLE_MDNS="false"; shift 1 ;;
+    --mdns-hostname) MDNS_HOSTNAME="$2"; shift 2 ;;
 
     --eth-device) ETH_DEVICE="$2"; shift 2 ;;
     --eth-ip) ETH_IP="$2"; shift 2 ;;
@@ -177,6 +183,8 @@ ENABLE_ROOT_ACCOUNT="$ENABLE_ROOT_ACCOUNT" \
 ROOT_PASSWORD="$ROOT_PASSWORD" \
 START_ON_BOOT="$START_ON_BOOT" \
 START_NOW="$START_NOW" \
+ENABLE_MDNS="$ENABLE_MDNS" \
+MDNS_HOSTNAME="$MDNS_HOSTNAME" \
 CONFIG_FILE="$CONFIG_FILE" \
 PROJECT_DIR="$PROJECT_DIR" \
 "$SETUP_SCRIPT"
