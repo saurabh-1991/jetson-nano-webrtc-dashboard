@@ -212,6 +212,7 @@ curl -sS http://127.0.0.1:8000/health
 curl -sS http://127.0.0.1:8000/api/stats
 systemctl status avahi-daemon --no-pager
 hostnamectl status --static
+bash ./scripts/check_lan_access.sh
 ```
 
 Run from laptop/phone on same LAN:

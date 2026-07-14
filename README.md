@@ -125,6 +125,7 @@ git reset --hard origin/poc_demo_v1.1.0
   - `scripts/configure_static_ip_nmcli.sh` (static Ethernet/Wi-Fi)
   - `scripts/powerrun_apply_all.sh` (one-command orchestrator)
   - `scripts/powerrun.config` (user-editable custom IP/boot config)
+  - `scripts/check_lan_access.sh` (one-command LAN diagnostics and recommended URL output)
 
 ## 🚀 Quick Start
 
@@ -234,6 +235,15 @@ Power-run now enables mDNS by default, so clients can open a stable hostname ins
   - `MDNS_HOSTNAME="jetson-dashboard"`
 
 Windows note: if `.local` does not resolve, install Bonjour services (or use static IP fallback).
+
+### Quick LAN diagnostics on Jetson
+
+Run this from Jetson host to print interface/IP state, service health, and recommended operator URLs:
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+bash ./scripts/check_lan_access.sh
+```
 
 ## 📈 Runtime metrics and endpoints
 
