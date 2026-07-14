@@ -237,6 +237,90 @@ Notes:
 - OpenCV CUDA device count can still be `0` if that build lacks usable CUDA runtime/device support.
 - MJPEG encoding path is primarily CPU-based even when parts of the pipeline are hardware accelerated.
 
+## Plug-and-Play Power-Run Setup (Auto Login + Auto Start + Static IP)
+
+Use this section when you want the Jetson board to boot and serve the dashboard automatically with predictable URLs.
+
+### What needs to be done
+
+1. Configure desktop autologin (you asked for root user).
+2. Install a systemd service that starts Docker Compose on boot.
+3. Configure static IPv4 on Ethernet and/or Wi-Fi so URL stays fixed.
+
+### 1) Configure boot automation (autologin + auto-start services)
+
+Run on Jetson host:
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+chmod +x scripts/setup_powerrun_jetson.sh scripts/configure_static_ip_nmcli.sh
+
+# Option A (recommended security): autologin with non-root user (e.g., saurabh)
+sudo AUTOLOGIN_USER=saurabh ENABLE_AUTOLOGIN=true ENABLE_ROOT_ACCOUNT=false \
+  PROJECT_DIR=/home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard \
+  ./scripts/setup_powerrun_jetson.sh
+
+# Option B (requested): root autologin
+# NOTE: this is insecure for production networks.
+sudo AUTOLOGIN_USER=root ENABLE_AUTOLOGIN=true ENABLE_ROOT_ACCOUNT=true ROOT_PASSWORD='ChangeMeNow!' \
+  PROJECT_DIR=/home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard \
+  ./scripts/setup_powerrun_jetson.sh
+```
+
+This installs and enables:
+
+- LightDM autologin config: `/etc/lightdm/lightdm.conf.d/90-jetson-dashboard-autologin.conf`
+- systemd service: `/etc/systemd/system/jetson-dashboard.service`
+
+The service runs:
+
+- `docker-compose -f <project>/docker-compose.yml up -d` on boot
+
+### 2) Configure static IP (Ethernet and/or Wi-Fi)
+
+#### Ethernet static IP
+
+```bash
+sudo ./scripts/configure_static_ip_nmcli.sh \
+  --eth-device eth0 \
+  --eth-ip 192.168.1.50/24 \
+  --eth-gateway 192.168.1.1 \
+  --eth-dns 192.168.1.1,8.8.8.8
+```
+
+#### Wi-Fi static IP
+
+```bash
+sudo ./scripts/configure_static_ip_nmcli.sh \
+  --wifi-device wlan0 \
+  --wifi-ssid "YourRouterSSID" \
+  --wifi-password "YourRouterPassword" \
+  --wifi-ip 192.168.1.60/24 \
+  --wifi-gateway 192.168.1.1 \
+  --wifi-dns 192.168.1.1,8.8.8.8
+```
+
+After this, open dashboard with fixed URL:
+
+- `http://192.168.1.50/` (Ethernet example)
+- `http://192.168.1.60/` (Wi-Fi example)
+
+Docker containers use host port mapping (`80`, `8000`), so static host IP gives stable browser URL.
+
+### 3) Validation after reboot
+
+```bash
+systemctl status jetson-dashboard.service --no-pager
+docker-compose ps
+curl http://127.0.0.1/health || curl http://127.0.0.1:8000/health
+```
+
+From another device on LAN:
+
+```bash
+curl http://<STATIC_IP>/api/system/status
+```
+
 ## Debugging
 
 ### Backend Debugging
