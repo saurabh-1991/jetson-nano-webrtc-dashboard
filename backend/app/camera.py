@@ -57,6 +57,13 @@ class CameraCapture:
         self._last_jpeg_bytes = None
         self._last_jpeg_frame_count = -1
         self._last_jpeg_quality = 80
+        self._last_client_access_ts = time.time()
+        self._frame_cache_hits = 0
+        self._frame_cache_misses = 0
+        self._jpeg_cache_hits = 0
+        self._jpeg_cache_misses = 0
+        self._jpeg_encode_total_ms = 0.0
+        self._jpeg_encode_count = 0
         self.opencv_gstreamer_enabled = self._check_opencv_gstreamer_support()
         self._detect_cuda_capability()
         self._initialize_camera()
@@ -701,6 +708,7 @@ class CameraCapture:
 
         with self._frame_lock:
             now = time.perf_counter()
+            self._last_client_access_ts = time.time()
 
             # Share the most recent frame across concurrent consumers to avoid
             # multiplying camera reads when multiple clients are connected.
@@ -708,6 +716,7 @@ class CameraCapture:
                 self._last_frame is not None
                 and (now - self._last_frame_timestamp) < self.frame_interval_seconds
             ):
+                self._frame_cache_hits += 1
                 return True, self._last_frame.copy()
 
             try:
@@ -719,6 +728,7 @@ class CameraCapture:
                     return False, None
 
                 self.frame_count += 1
+                self._frame_cache_misses += 1
 
                 # Process frame using CUDA if available
                 if self.cuda_enabled:
@@ -758,17 +768,92 @@ class CameraCapture:
                 and self._last_jpeg_frame_count == current_frame_count
                 and self._last_jpeg_quality == int(quality)
             ):
+                self._jpeg_cache_hits += 1
                 return True, self._last_jpeg_bytes
 
             source_frame = self._last_frame if self._last_frame is not None else frame
+            encode_started = time.perf_counter()
             ok, jpeg = cv2.imencode(".jpg", source_frame, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
             if not ok:
                 return False, None
+            encode_elapsed_ms = (time.perf_counter() - encode_started) * 1000.0
 
             self._last_jpeg_bytes = jpeg.tobytes()
             self._last_jpeg_frame_count = current_frame_count
             self._last_jpeg_quality = int(quality)
+            self._jpeg_cache_misses += 1
+            self._jpeg_encode_total_ms += encode_elapsed_ms
+            self._jpeg_encode_count += 1
             return True, self._last_jpeg_bytes
+
+    def get_performance_stats(self) -> dict:
+        """Return camera cache/encoding performance counters."""
+        with self._frame_lock:
+            frame_total = self._frame_cache_hits + self._frame_cache_misses
+            jpeg_total = self._jpeg_cache_hits + self._jpeg_cache_misses
+
+            frame_hit_ratio = (
+                float(self._frame_cache_hits) / float(frame_total) if frame_total > 0 else 0.0
+            )
+            jpeg_hit_ratio = (
+                float(self._jpeg_cache_hits) / float(jpeg_total) if jpeg_total > 0 else 0.0
+            )
+            avg_jpeg_encode_ms = (
+                float(self._jpeg_encode_total_ms) / float(self._jpeg_encode_count)
+                if self._jpeg_encode_count > 0
+                else 0.0
+            )
+
+            return {
+                "frame_cache": {
+                    "hits": self._frame_cache_hits,
+                    "misses": self._frame_cache_misses,
+                    "hit_ratio": frame_hit_ratio,
+                },
+                "jpeg_cache": {
+                    "hits": self._jpeg_cache_hits,
+                    "misses": self._jpeg_cache_misses,
+                    "hit_ratio": jpeg_hit_ratio,
+                },
+                "jpeg_encode": {
+                    "count": self._jpeg_encode_count,
+                    "avg_ms": avg_jpeg_encode_ms,
+                },
+                "last_client_access_ts": self._last_client_access_ts,
+                "target_fps": self.target_fps,
+            }
+
+    def maybe_release_if_idle(self, idle_seconds: int, active_mjpeg_clients: int = 0, webrtc_connections: int = 0) -> bool:
+        """Release camera when idle and no active viewers."""
+        with self._frame_lock:
+            if not self.is_open or self.cap is None:
+                return False
+
+            if active_mjpeg_clients > 0 or webrtc_connections > 0:
+                return False
+
+            idle_for = time.time() - float(self._last_client_access_ts)
+            if idle_for < float(idle_seconds):
+                return False
+
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+
+            self.cap = None
+            self.is_open = False
+            self._last_frame = None
+            self._last_jpeg_bytes = None
+            self._last_jpeg_frame_count = -1
+            self._last_frame_timestamp = 0.0
+            logger.info(
+                "Camera auto-released after %.2fs idle (mjpeg=%s, webrtc=%s)",
+                idle_for,
+                active_mjpeg_clients,
+                webrtc_connections,
+            )
+            return True
 
     def _process_with_cuda(self, frame) -> np.ndarray:
         """
@@ -850,6 +935,7 @@ class CameraCapture:
             "startup_probe_scores": self.startup_probe_scores,
             "startup_probe_order": self.startup_probe_order,
             "last_camera_error": self.last_camera_error,
+            "performance": self.get_performance_stats(),
         }
 
     def __del__(self):

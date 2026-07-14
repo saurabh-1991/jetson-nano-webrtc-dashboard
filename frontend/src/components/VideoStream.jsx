@@ -140,6 +140,7 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
   }
 
   const disconnect = () => {
+    const baseUrl = getBaseUrl()
     closePeerConnection()
     if (imgRef.current) {
       imgRef.current.src = ''
@@ -156,6 +157,13 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
       popoutRef.current.close()
       popoutRef.current = null
     }
+
+    // Best-effort camera release request. Backend releases only when no active viewers.
+    fetch(`${baseUrl}/api/camera/stop`, {
+      method: 'POST'
+    }).catch((err) => {
+      console.warn('Camera stop request failed:', err)
+    })
   }
 
   const openLargeView = () => {

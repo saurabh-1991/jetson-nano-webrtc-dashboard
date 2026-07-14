@@ -5,6 +5,7 @@ import logging
 import asyncio
 import signal
 import sys
+import os
 from datetime import datetime
 from typing import List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
@@ -48,8 +49,43 @@ logger = logging.getLogger(__name__)
 
 # Status tracking
 status_broadcast_task = None
+camera_idle_watchdog_task = None
 active_mjpeg_clients = 0
 active_mjpeg_lock = asyncio.Lock()
+CAMERA_IDLE_RELEASE_SECONDS = max(3, int(os.getenv("CAMERA_IDLE_RELEASE_SECONDS", "6")))
+
+
+async def camera_idle_watchdog():
+    """Release camera automatically after inactivity when no viewers remain."""
+    while True:
+        try:
+            await asyncio.sleep(1.0)
+
+            camera = getattr(camera_module, "camera", None)
+            if camera is None:
+                continue
+
+            async with active_mjpeg_lock:
+                current_mjpeg_clients = active_mjpeg_clients
+
+            current_webrtc_connections = 0
+            if is_webrtc_available():
+                try:
+                    current_webrtc_connections = get_webrtc_manager_safe().get_connection_count()
+                except Exception:
+                    current_webrtc_connections = 0
+
+            released = camera.maybe_release_if_idle(
+                idle_seconds=CAMERA_IDLE_RELEASE_SECONDS,
+                active_mjpeg_clients=current_mjpeg_clients,
+                webrtc_connections=current_webrtc_connections,
+            )
+            if released:
+                camera_module.camera = None
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Camera idle watchdog error: {e}")
 
 
 def cleanup_resources():
@@ -94,19 +130,26 @@ app = FastAPI(
 # Startup and shutdown handlers (compatible with Python 3.6)
 @app.on_event("startup")
 async def on_startup():
-    global status_broadcast_task
+    global status_broadcast_task, camera_idle_watchdog_task
     logger.info("Starting Jetson Nano Dashboard backend")
     status_broadcast_task = asyncio.ensure_future(broadcast_device_status())
+    camera_idle_watchdog_task = asyncio.ensure_future(camera_idle_watchdog())
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    global status_broadcast_task
+    global status_broadcast_task, camera_idle_watchdog_task
     logger.info("Shutting down Jetson Nano Dashboard backend")
     if status_broadcast_task:
         status_broadcast_task.cancel()
         try:
             await status_broadcast_task
+        except asyncio.CancelledError:
+            pass
+    if camera_idle_watchdog_task:
+        camera_idle_watchdog_task.cancel()
+        try:
+            await camera_idle_watchdog_task
         except asyncio.CancelledError:
             pass
 
@@ -240,10 +283,47 @@ async def camera_info():
         "is_open": camera.is_open if camera else False,
         "frame_count": camera.get_frame_count() if camera else 0,
         "cuda_enabled": camera.cuda_enabled if camera else False,
+        "performance": camera.get_performance_stats() if camera else None,
         "selected_pipeline": pipeline_info.get("selected_pipeline"),
         "selected_pipeline_mode": pipeline_info.get("selected_pipeline_mode"),
         "pipeline_diagnostics": pipeline_info,
         "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.post("/api/camera/stop")
+async def stop_camera():
+    """Request camera release after local client stop; safe for multi-client use."""
+    # Give stream generators a short moment to observe disconnection and decrement counters.
+    await asyncio.sleep(0.35)
+
+    async with active_mjpeg_lock:
+        current_mjpeg_clients = active_mjpeg_clients
+
+    current_webrtc_connections = 0
+    if is_webrtc_available():
+        try:
+            current_webrtc_connections = get_webrtc_manager_safe().get_connection_count()
+        except Exception:
+            current_webrtc_connections = 0
+
+    camera = getattr(camera_module, "camera", None)
+    released = False
+    if camera is not None:
+        released = camera.maybe_release_if_idle(
+            idle_seconds=0,
+            active_mjpeg_clients=current_mjpeg_clients,
+            webrtc_connections=current_webrtc_connections,
+        )
+        if released:
+            camera_module.camera = None
+
+    return {
+        "released": released,
+        "active_mjpeg_clients": current_mjpeg_clients,
+        "webrtc_connections": current_webrtc_connections,
+        "camera_open": bool(getattr(camera_module, "camera", None) and camera_module.camera.is_open),
+        "timestamp": datetime.now().isoformat(),
     }
 
 
@@ -497,7 +577,10 @@ async def get_stats():
             webrtc_connections = 0
     
     return {
-            "camera_frames": camera.get_frame_count() if camera else 0,
+        "camera_frames": camera.get_frame_count() if camera else 0,
+        "camera_performance": camera.get_performance_stats() if camera else None,
+        "camera_idle_release_seconds": CAMERA_IDLE_RELEASE_SECONDS,
+        "active_mjpeg_clients": active_mjpeg_clients,
         "webrtc_connections": webrtc_connections,
         "timestamp": datetime.now().isoformat()
     }
