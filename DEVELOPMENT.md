@@ -241,6 +241,29 @@ Notes:
 
 Use this section when you want the Jetson board to boot and serve the dashboard automatically with predictable URLs.
 
+### One-command setup (recommended)
+
+Use the wrapper below to apply boot automation + static IP in one command.
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+chmod +x scripts/powerrun_apply_all.sh scripts/setup_powerrun_jetson.sh scripts/configure_static_ip_nmcli.sh
+
+# Root autologin + Ethernet static IP example
+sudo ./scripts/powerrun_apply_all.sh \
+  --project-dir /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard \
+  --autologin-user root --enable-root-account --root-password 'ChangeMeNow!' \
+  --eth-device eth0 --eth-ip 192.168.1.50/24 --eth-gateway 192.168.1.1 --eth-dns 192.168.1.1,8.8.8.8
+
+# Add Wi-Fi static IP in the same run (optional)
+sudo ./scripts/powerrun_apply_all.sh \
+  --project-dir /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard \
+  --autologin-user root --enable-root-account --root-password 'ChangeMeNow!' \
+  --eth-device eth0 --eth-ip 192.168.1.50/24 --eth-gateway 192.168.1.1 --eth-dns 192.168.1.1,8.8.8.8 \
+  --wifi-device wlan0 --wifi-ssid "YourRouterSSID" --wifi-password "YourRouterPassword" \
+  --wifi-ip 192.168.1.60/24 --wifi-gateway 192.168.1.1 --wifi-dns 192.168.1.1,8.8.8.8
+```
+
 ### What needs to be done
 
 1. Configure desktop autologin (you asked for root user).
