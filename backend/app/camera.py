@@ -4,6 +4,7 @@ import logging
 import re
 import subprocess
 import time
+import threading
 import cv2
 import numpy as np
 from .config import (
@@ -33,6 +34,8 @@ class CameraCapture:
         self.cap = None
         self.is_open = False
         self.frame_count = 0
+        self.target_fps = max(1, int(CAMERA_FPS))
+        self.frame_interval_seconds = 1.0 / float(self.target_fps)
         self.cuda_enabled = False
         self.cuda_available = False
         self.cuda_device_count = 0
@@ -47,6 +50,12 @@ class CameraCapture:
         self.startup_probe_order = []
         self.last_camera_error = None
         self.detected_usb_modes = {}
+        self._frame_lock = threading.Lock()
+        self._last_frame = None
+        self._last_frame_timestamp = 0.0
+        self._last_jpeg_bytes = None
+        self._last_jpeg_frame_count = -1
+        self._last_jpeg_quality = 80
         self.opencv_gstreamer_enabled = self._check_opencv_gstreamer_support()
         self._detect_cuda_capability()
         self._initialize_camera()
@@ -689,33 +698,76 @@ class CameraCapture:
         if not self.is_open or self.cap is None:
             return False, None
 
-        try:
-            ret, frame = self.cap.read()
+        with self._frame_lock:
+            now = time.perf_counter()
 
-            if not ret or frame is None:
-                logger.warning("Failed to read frame from camera")
+            # Share the most recent frame across concurrent consumers to avoid
+            # multiplying camera reads when multiple clients are connected.
+            if (
+                self._last_frame is not None
+                and (now - self._last_frame_timestamp) < self.frame_interval_seconds
+            ):
+                return True, self._last_frame.copy()
+
+            try:
+                ret, frame = self.cap.read()
+
+                if not ret or frame is None:
+                    logger.warning("Failed to read frame from camera")
+                    self.release()
+                    return False, None
+
+                self.frame_count += 1
+
+                # Process frame using CUDA if available
+                if self.cuda_enabled:
+                    try:
+                        processed = self._process_with_cuda(frame)
+                    except Exception as e:
+                        logger.warning(f"CUDA processing failed: {e}, using CPU")
+                        self.cuda_enabled = False
+                        self.cuda_available = False
+                        processed = self._process_with_cpu(frame)
+                else:
+                    processed = self._process_with_cpu(frame)
+
+                self._last_frame = processed
+                self._last_frame_timestamp = now
+                # Invalidate cached JPEG for the new frame.
+                self._last_jpeg_frame_count = -1
+                self._last_jpeg_bytes = None
+                return True, processed.copy()
+
+            except Exception as e:
+                logger.error(f"Error getting frame: {e}")
                 self.release()
                 return False, None
 
-            self.frame_count += 1
-
-            # Process frame using CUDA if available
-            if self.cuda_enabled:
-                try:
-                    processed = self._process_with_cuda(frame)
-                    return True, processed
-                except Exception as e:
-                    logger.warning(f"CUDA processing failed: {e}, using CPU")
-                    self.cuda_enabled = False
-                    self.cuda_available = False
-                    return True, self._process_with_cpu(frame)
-            else:
-                return True, self._process_with_cpu(frame)
-
-        except Exception as e:
-            logger.error(f"Error getting frame: {e}")
-            self.release()
+    def get_jpeg_frame(self, quality: int = 80) -> tuple:
+        """Get current frame encoded as JPEG with shared cache across clients."""
+        success, frame = self.get_frame()
+        if not success or frame is None:
             return False, None
+
+        with self._frame_lock:
+            current_frame_count = self.frame_count
+
+            if (
+                self._last_jpeg_bytes is not None
+                and self._last_jpeg_frame_count == current_frame_count
+                and self._last_jpeg_quality == int(quality)
+            ):
+                return True, self._last_jpeg_bytes
+
+            source_frame = self._last_frame if self._last_frame is not None else frame
+            ok, jpeg = cv2.imencode(".jpg", source_frame, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+            if not ok:
+                return False, None
+
+            self._last_jpeg_bytes = jpeg.tobytes()
+            self._last_jpeg_frame_count = current_frame_count
+            self._last_jpeg_quality = int(quality)
+            return True, self._last_jpeg_bytes
 
     def _process_with_cuda(self, frame) -> np.ndarray:
         """
@@ -760,9 +812,15 @@ class CameraCapture:
     def release(self):
         """Release camera resources"""
         try:
-            if self.cap is not None:
-                self.cap.release()
+            with self._frame_lock:
+                if self.cap is not None:
+                    self.cap.release()
+                    self.cap = None
                 self.is_open = False
+                self._last_frame = None
+                self._last_jpeg_bytes = None
+                self._last_jpeg_frame_count = -1
+                self._last_frame_timestamp = 0.0
                 logger.info("Camera released")
         except Exception as e:
             logger.error(f"Error releasing camera: {e}")

@@ -10,7 +10,6 @@ from typing import List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-import cv2
 
 from .config import API_DEBUG, LOG_LEVEL, LOG_FORMAT
 from .camera import get_camera, check_cuda_availability
@@ -252,18 +251,13 @@ async def camera_info():
 async def get_frame():
     """Get single frame as JPEG"""
     camera = get_camera()
-    
-    success, frame = camera.get_frame()
-    if not success or frame is None:
+
+    success, jpeg_bytes = camera.get_jpeg_frame(quality=80)
+    if not success or jpeg_bytes is None:
         raise HTTPException(status_code=500, detail="Failed to capture frame")
 
-    # Encode frame as JPEG
-    success, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to encode frame")
-
     return StreamingResponse(
-        iter([jpeg.tobytes()]),
+        iter([jpeg_bytes]),
         media_type="image/jpeg"
     )
 
@@ -286,21 +280,16 @@ async def stream_mjpeg(request: Request):
                     logger.info("MJPEG client disconnected")
                     break
 
-                success, frame = camera.get_frame()
-                if not success or frame is None:
+                success, jpeg_bytes = camera.get_jpeg_frame(quality=80)
+                if not success or jpeg_bytes is None:
                     await asyncio.sleep(0.05)
-                    continue
-
-                # Encode frame as JPEG
-                success, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                if not success:
                     continue
 
                 # Yield MJPEG boundary
                 yield b"--frame\r\n"
                 yield b"Content-Type: image/jpeg\r\n"
-                yield b"Content-Length: " + str(len(jpeg.tobytes())).encode() + b"\r\n\r\n"
-                yield jpeg.tobytes()
+                yield b"Content-Length: " + str(len(jpeg_bytes)).encode() + b"\r\n\r\n"
+                yield jpeg_bytes
                 yield b"\r\n"
 
                 # Small delay to limit frame rate
