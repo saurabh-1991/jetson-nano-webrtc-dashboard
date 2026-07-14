@@ -98,12 +98,16 @@ body {
   grid-column: 1 / -1;
 }
 
-.dashboard-section.controls-panel {
+.dashboard-section.camera-panel {
   grid-column: 1 / span 6;
 }
 
-.dashboard-section.status-panel {
+.dashboard-section.controls-panel {
   grid-column: 7 / span 6;
+}
+
+.dashboard-section.status-panel {
+  grid-column: 1 / span 6;
 }
 
 .app-footer {
@@ -131,6 +135,10 @@ body {
   }
 
   .dashboard-section.full-width {
+    grid-column: 1;
+  }
+
+  .dashboard-section.camera-panel {
     grid-column: 1;
   }
 

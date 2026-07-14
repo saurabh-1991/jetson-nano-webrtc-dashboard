@@ -18,7 +18,7 @@ function App() {
       <main className="app-main">
         <div className="dashboard-grid">
           {/* Video Stream Section */}
-          <section className="dashboard-section full-width">
+          <section className="dashboard-section camera-panel">
             <h2>Live Camera Feed</h2>
             <VideoStream />
           </section>

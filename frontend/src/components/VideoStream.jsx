@@ -162,11 +162,29 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
 
   const toggleFullscreen = async () => {
     try {
-      if (!document.fullscreenElement && wrapperRef.current) {
-        await wrapperRef.current.requestFullscreen()
+      const el = wrapperRef.current
+      if (!el) return
+
+      const requestFullscreen =
+        el.requestFullscreen ||
+        el.webkitRequestFullscreen ||
+        el.msRequestFullscreen
+
+      const exitFullscreen =
+        document.exitFullscreen ||
+        document.webkitExitFullscreen ||
+        document.msExitFullscreen
+
+      const fullscreenElement =
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.msFullscreenElement
+
+      if (!fullscreenElement && requestFullscreen) {
+        await requestFullscreen.call(el)
         setIsFullscreen(true)
-      } else if (document.fullscreenElement) {
-        await document.exitFullscreen()
+      } else if (fullscreenElement && exitFullscreen) {
+        await exitFullscreen.call(document)
         setIsFullscreen(false)
       }
     } catch (err) {
@@ -177,32 +195,19 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
 
   const openPopout = () => {
     const baseUrl = getBaseUrl()
-    const popup = window.open('', 'jetson_camera_popout', 'width=1200,height=760,resizable=yes,scrollbars=no')
+    const streamUrl = `${baseUrl}/api/camera/stream?t=${Date.now()}`
+
+    const popup = window.open(
+      streamUrl,
+      'jetson_camera_popout',
+      'width=1280,height=840,resizable=yes,scrollbars=no,noopener,noreferrer'
+    )
+
     if (!popup) {
       setError('Pop-out blocked by browser. Please allow pop-ups for this page.')
       return
     }
-
-    const streamUrl = `${baseUrl}/api/camera/stream?t=${Date.now()}`
-    popup.document.write(`
-      <!doctype html>
-      <html>
-      <head>
-        <title>Live Camera Pop-out</title>
-        <style>
-          html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
-          .viewer { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
-          img { width: 100%; height: 100%; object-fit: contain; }
-          .hint { position: fixed; top: 10px; left: 10px; color: #fff; background: rgba(0,0,0,.45); padding: 6px 10px; border-radius: 6px; font-family: Arial; font-size: 12px; }
-        </style>
-      </head>
-      <body>
-        <div class="hint">Live Camera (Pop-out)</div>
-        <div class="viewer"><img src="${streamUrl}" alt="Live Camera" /></div>
-      </body>
-      </html>
-    `)
-    popup.document.close()
+    popup.focus()
     popoutRef.current = popup
   }
 
@@ -297,7 +302,6 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
         <button
           onClick={toggleFullscreen}
           className="btn btn-secondary"
-          disabled={!isConnected}
         >
           {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
         </button>
@@ -305,7 +309,6 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
         <button
           onClick={openPopout}
           className="btn btn-secondary"
-          disabled={!isConnected}
         >
           Pop-out
         </button>
