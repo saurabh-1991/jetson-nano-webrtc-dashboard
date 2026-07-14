@@ -143,6 +143,34 @@
   padding: 0.15rem 0.5rem;
 }
 
+.video-live-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.metrics-chip {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #374151;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  padding: 0.16rem 0.5rem;
+}
+
+.metrics-chip-viewers {
+  color: #0b5ed7;
+  background: #e7f1ff;
+  border-color: #cfe2ff;
+}
+
+.metrics-chip-warning {
+  color: #9a3412;
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
 .fallback-notice {
   padding: 0.75rem;
   background: #fff3cd;

@@ -12,6 +12,8 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
   const [notice, setNotice] = useState(null)
   const [streamMode, setStreamMode] = useState('none') // none | webrtc | mjpeg
   const [mjpegUrl, setMjpegUrl] = useState('')
+  const [liveStats, setLiveStats] = useState(null)
+  const [statsError, setStatsError] = useState(false)
   const pcRef = useRef(null)
 
   const getBaseUrl = () => apiBaseUrl || (
@@ -284,11 +286,46 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
     setError('Failed to load MJPEG stream from backend')
   }
 
+  const pollLiveStats = async () => {
+    try {
+      const baseUrl = getBaseUrl()
+      const response = await fetch(`${baseUrl}/api/stats`, {
+        cache: 'no-store'
+      })
+      if (!response.ok) {
+        throw new Error(`stats ${response.status}`)
+      }
+
+      const stats = await response.json()
+      setLiveStats(stats)
+      setStatsError(false)
+    } catch (err) {
+      setStatsError(true)
+    }
+  }
+
   useEffect(() => {
+    pollLiveStats()
+    const timer = setInterval(() => {
+      pollLiveStats()
+    }, 2000)
+
     return () => {
+      clearInterval(timer)
       disconnect()
     }
   }, [])
+
+  const mjpegViewers = Number(liveStats?.active_mjpeg_clients || 0)
+  const webrtcViewers = Number(liveStats?.webrtc_connections || 0)
+  const totalViewers = mjpegViewers + webrtcViewers
+  const cameraPerf = liveStats?.camera_performance || null
+  const frameHitRatio = cameraPerf?.frame_cache?.hit_ratio
+  const jpegHitRatio = cameraPerf?.jpeg_cache?.hit_ratio
+  const avgEncodeMs = cameraPerf?.jpeg_encode?.avg_ms
+
+  const toPct = (v) => (typeof v === 'number' ? `${Math.round(v * 100)}%` : 'NA')
+  const toMs = (v) => (typeof v === 'number' ? `${v.toFixed(2)} ms` : 'NA')
 
   return (
     <div className="video-stream-container">
@@ -369,6 +406,20 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
           <span className="stream-mode">
             Mode: {streamMode.toUpperCase()}
           </span>
+        )}
+      </div>
+
+      <div className="video-live-metrics">
+        <span className="metrics-chip metrics-chip-viewers">
+          Viewers: {totalViewers}
+        </span>
+        <span className="metrics-chip">MJPEG: {mjpegViewers}</span>
+        <span className="metrics-chip">WebRTC: {webrtcViewers}</span>
+        <span className="metrics-chip">Frame Cache: {toPct(frameHitRatio)}</span>
+        <span className="metrics-chip">JPEG Cache: {toPct(jpegHitRatio)}</span>
+        <span className="metrics-chip">Avg JPEG Encode: {toMs(avgEncodeMs)}</span>
+        {statsError && (
+          <span className="metrics-chip metrics-chip-warning">Stats reconnecting...</span>
         )}
       </div>
 
