@@ -51,16 +51,16 @@ services:
     image: docker:cli
     container_name: jetson-docker-prune
     command: >
-      sh -c "
-        INTERVAL=${AUTO_PRUNE_INTERVAL_SECONDS:-3600};
-        echo '[docker-prune] Started. Interval='\"$${INTERVAL}\"'s';
+      sh -c '
+        INTERVAL="$${AUTO_PRUNE_INTERVAL_SECONDS:-3600}";
+        echo "[docker-prune] Started. Interval=$${INTERVAL}s";
         while true; do
-          echo '[docker-prune] Running prune at '$(date -Iseconds);
+          echo "[docker-prune] Running prune at $$(date -Iseconds)";
           docker image prune -f;
           docker builder prune -f;
-          sleep \"$${INTERVAL}\";
+          sleep "$${INTERVAL}";
         done
-      "
+      '
     environment:
       - AUTO_PRUNE_INTERVAL_SECONDS=3600
     volumes:
