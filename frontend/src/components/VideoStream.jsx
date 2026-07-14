@@ -5,6 +5,11 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
   const videoRef = useRef(null)
   const imgRef = useRef(null)
   const popoutRef = useRef(null)
+  const streamSessionIdRef = useRef(
+    (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `sid-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  )
   const [isConnecting, setIsConnecting] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
   const [connectionState, setConnectionState] = useState('disconnected')
@@ -43,7 +48,9 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
     setError(null)
 
     // timestamp prevents stale browser cache
-    setMjpegUrl(`${baseUrl}/api/camera/stream?t=${Date.now()}`)
+    setMjpegUrl(
+      `${baseUrl}/api/camera/stream?sid=${encodeURIComponent(streamSessionIdRef.current)}&t=${Date.now()}`
+    )
   }
 
   const connectStream = async () => {
@@ -162,7 +169,11 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
 
     // Best-effort camera release request. Backend releases only when no active viewers.
     fetch(`${baseUrl}/api/camera/stop`, {
-      method: 'POST'
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stream_session_id: streamSessionIdRef.current
+      })
     }).catch((err) => {
       console.warn('Camera stop request failed:', err)
     })

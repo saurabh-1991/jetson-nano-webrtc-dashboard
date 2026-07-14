@@ -6,6 +6,7 @@ import asyncio
 import signal
 import sys
 import os
+import uuid
 from datetime import datetime
 from typing import List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
@@ -50,7 +51,7 @@ logger = logging.getLogger(__name__)
 # Status tracking
 status_broadcast_task = None
 camera_idle_watchdog_task = None
-active_mjpeg_clients = 0
+active_mjpeg_sessions = set()
 active_mjpeg_lock = asyncio.Lock()
 CAMERA_IDLE_RELEASE_SECONDS = max(3, int(os.getenv("CAMERA_IDLE_RELEASE_SECONDS", "6")))
 
@@ -66,7 +67,7 @@ async def camera_idle_watchdog():
                 continue
 
             async with active_mjpeg_lock:
-                current_mjpeg_clients = active_mjpeg_clients
+                current_mjpeg_clients = len(active_mjpeg_sessions)
 
             current_webrtc_connections = 0
             if is_webrtc_available():
@@ -292,13 +293,22 @@ async def camera_info():
 
 
 @app.post("/api/camera/stop")
-async def stop_camera():
+async def stop_camera(request: dict = None):
     """Request camera release after local client stop; safe for multi-client use."""
+    request = request or {}
+    stream_session_id = request.get("stream_session_id")
+
+    # Explicitly unregister the caller's MJPEG session for immediate stats update.
+    if stream_session_id:
+        async with active_mjpeg_lock:
+            if stream_session_id in active_mjpeg_sessions:
+                active_mjpeg_sessions.discard(stream_session_id)
+
     # Give stream generators a short moment to observe disconnection and decrement counters.
     await asyncio.sleep(0.35)
 
     async with active_mjpeg_lock:
-        current_mjpeg_clients = active_mjpeg_clients
+        current_mjpeg_clients = len(active_mjpeg_sessions)
 
     current_webrtc_connections = 0
     if is_webrtc_available():
@@ -320,6 +330,7 @@ async def stop_camera():
 
     return {
         "released": released,
+        "stream_session_id": stream_session_id,
         "active_mjpeg_clients": current_mjpeg_clients,
         "webrtc_connections": current_webrtc_connections,
         "camera_open": bool(getattr(camera_module, "camera", None) and camera_module.camera.is_open),
@@ -346,13 +357,16 @@ async def get_frame():
 async def stream_mjpeg(request: Request):
     """Stream video as MJPEG (fallback for low-latency needs)"""
     async def generate():
-        global active_mjpeg_clients
-
+        stream_session_id = request.query_params.get("sid") or str(uuid.uuid4())
         camera = get_camera()
 
         async with active_mjpeg_lock:
-            active_mjpeg_clients += 1
-            logger.info(f"MJPEG client connected. Active clients: {active_mjpeg_clients}")
+            active_mjpeg_sessions.add(stream_session_id)
+            logger.info(
+                "MJPEG client connected sid=%s. Active clients: %s",
+                stream_session_id,
+                len(active_mjpeg_sessions),
+            )
         
         try:
             while True:
@@ -382,8 +396,13 @@ async def stream_mjpeg(request: Request):
             logger.error(f"Error in MJPEG stream: {e}")
         finally:
             async with active_mjpeg_lock:
-                active_mjpeg_clients = max(0, active_mjpeg_clients - 1)
-                remaining_mjpeg_clients = active_mjpeg_clients
+                active_mjpeg_sessions.discard(stream_session_id)
+                remaining_mjpeg_clients = len(active_mjpeg_sessions)
+                logger.info(
+                    "MJPEG client disconnected sid=%s. Active clients: %s",
+                    stream_session_id,
+                    remaining_mjpeg_clients,
+                )
 
             # Release camera when no active MJPEG clients and no active WebRTC clients.
             try:
@@ -580,7 +599,7 @@ async def get_stats():
         "camera_frames": camera.get_frame_count() if camera else 0,
         "camera_performance": camera.get_performance_stats() if camera else None,
         "camera_idle_release_seconds": CAMERA_IDLE_RELEASE_SECONDS,
-        "active_mjpeg_clients": active_mjpeg_clients,
+        "active_mjpeg_clients": len(active_mjpeg_sessions),
         "webrtc_connections": webrtc_connections,
         "timestamp": datetime.now().isoformat()
     }
