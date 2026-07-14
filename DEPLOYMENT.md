@@ -43,6 +43,21 @@ Example path used during validation:
 cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
 ```
 
+### Branch for power-run automation
+
+Power-run automation (autologin + boot autostart + static IP scripts) is maintained on branch:
+
+- `poc_demo_v1.1.0`
+
+Pull that branch on Jetson:
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+git fetch origin
+git checkout -B poc_demo_v1.1.0 origin/poc_demo_v1.1.0
+git reset --hard origin/poc_demo_v1.1.0
+```
+
 ---
 
 ## 3) Dependency model for JP4.6
@@ -122,6 +137,34 @@ docker-compose down --remove-orphans
 docker-compose up -d --build
 docker-compose ps
 ```
+
+### Step A0 — One-command plug-and-play setup (autologin + boot start + static IP)
+
+This applies the power-run automation scripts introduced in `poc_demo_v1.1.0`.
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+chmod +x scripts/powerrun_apply_all.sh scripts/setup_powerrun_jetson.sh scripts/configure_static_ip_nmcli.sh
+
+# Example: root autologin + fixed Ethernet IP
+sudo ./scripts/powerrun_apply_all.sh \
+    --project-dir /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard \
+    --autologin-user root --enable-root-account --root-password 'ChangeMeNow!' \
+    --eth-device eth0 --eth-ip 192.168.1.50/24 --eth-gateway 192.168.1.1 --eth-dns 192.168.1.1,8.8.8.8
+
+# Optional: add Wi-Fi fixed IP in same run
+sudo ./scripts/powerrun_apply_all.sh \
+    --project-dir /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard \
+    --autologin-user root --enable-root-account --root-password 'ChangeMeNow!' \
+    --eth-device eth0 --eth-ip 192.168.1.50/24 --eth-gateway 192.168.1.1 --eth-dns 192.168.1.1,8.8.8.8 \
+    --wifi-device wlan0 --wifi-ssid "YourRouterSSID" --wifi-password "YourRouterPassword" \
+    --wifi-ip 192.168.1.60/24 --wifi-gateway 192.168.1.1 --wifi-dns 192.168.1.1,8.8.8.8
+```
+
+After setup, reboot once and use fixed URL:
+
+- `http://192.168.1.50/` (Ethernet example)
+- `http://192.168.1.60/` (Wi-Fi example)
 
 ### Step A (fast path) — Run existing images without rebuild
 
