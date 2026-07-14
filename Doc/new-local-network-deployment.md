@@ -13,10 +13,6 @@ After this setup, operators can usually open:
 
 ## 2) Visual overview
 
-### Expected dashboard screen
-
-![Dashboard Overview](./screenshots/dashboard-overview.png)
-
 ### Live view + metrics
 
 ![Live Dashboard](./screenshots/dashboard-live-video.png)
