@@ -10,6 +10,7 @@ import numpy as np
 from .config import (
     CAMERA_ACCELERATION,
     CAMERA_DEVICE,
+    CAMERA_FPS,
     CAMERA_SOURCE,
     CAMERA_USB_STARTUP_PROBE,
     CUDA_ENABLED,
@@ -812,6 +813,13 @@ class CameraCapture:
     def release(self):
         """Release camera resources"""
         try:
+            if not hasattr(self, "_frame_lock"):
+                if self.cap is not None:
+                    self.cap.release()
+                    self.cap = None
+                self.is_open = False
+                return
+
             with self._frame_lock:
                 if self.cap is not None:
                     self.cap.release()
