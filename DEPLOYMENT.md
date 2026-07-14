@@ -142,9 +142,18 @@ docker-compose ps
 
 This applies the power-run automation scripts introduced in `poc_demo_v1.1.0`.
 
+Before running, edit `scripts/powerrun.config` with your custom network values
+(`ETH_IP`, `ETH_GATEWAY`, `ETH_DNS`, and optional Wi-Fi values).
+
 ```bash
 cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
 chmod +x scripts/powerrun_apply_all.sh scripts/setup_powerrun_jetson.sh scripts/configure_static_ip_nmcli.sh
+
+# 1) Edit once
+nano scripts/powerrun.config
+
+# 2) Apply config-driven automation
+sudo ./scripts/powerrun_apply_all.sh
 
 # Example: root autologin + fixed Ethernet IP
 sudo ./scripts/powerrun_apply_all.sh \

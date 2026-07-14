@@ -245,9 +245,26 @@ Use this section when you want the Jetson board to boot and serve the dashboard 
 
 Use the wrapper below to apply boot automation + static IP in one command.
 
+Before running, edit this config file with your custom IP values:
+
+`scripts/powerrun.config`
+
+Example keys to update:
+
+- `ETH_IP`, `ETH_GATEWAY`, `ETH_DNS`
+- `WIFI_IP`, `WIFI_GATEWAY`, `WIFI_DNS`
+- `WIFI_SSID`, `WIFI_PASSWORD`
+- `AUTOLOGIN_USER`, `ENABLE_ROOT_ACCOUNT`, `ROOT_PASSWORD`
+
 ```bash
 cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
 chmod +x scripts/powerrun_apply_all.sh scripts/setup_powerrun_jetson.sh scripts/configure_static_ip_nmcli.sh
+
+# Edit config first
+nano scripts/powerrun.config
+
+# Run using config defaults
+sudo ./scripts/powerrun_apply_all.sh
 
 # Root autologin + Ethernet static IP example
 sudo ./scripts/powerrun_apply_all.sh \

@@ -21,6 +21,7 @@ fi
 
 PROJECT_DIR_DEFAULT="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$PROJECT_DIR_DEFAULT"
+CONFIG_FILE=""
 AUTOLOGIN_USER="root"
 ENABLE_AUTOLOGIN="true"
 ENABLE_ROOT_ACCOUNT="false"
@@ -46,6 +47,7 @@ Usage: sudo ./scripts/powerrun_apply_all.sh [options]
 
 Boot/service options:
   --project-dir <path>
+  --config <file>                (default: <project-dir>/scripts/powerrun.config)
   --autologin-user <user>         (default: root)
   --disable-autologin             (default: enabled)
   --enable-root-account           (requires --root-password)
@@ -78,6 +80,40 @@ Examples:
 EOF
 }
 
+load_config_file() {
+  local cfg="$1"
+  if [[ -f "$cfg" ]]; then
+    echo "[INFO] Loading config: $cfg"
+    # shellcheck disable=SC1090
+    source "$cfg"
+  else
+    echo "[INFO] Config not found, using defaults/CLI: $cfg"
+  fi
+}
+
+# First pass: read --project-dir / --config before loading config defaults.
+ARGS=("$@")
+for ((i = 0; i < ${#ARGS[@]}; i++)); do
+  case "${ARGS[$i]}" in
+    --project-dir)
+      if (( i + 1 < ${#ARGS[@]} )); then
+        PROJECT_DIR="${ARGS[$((i + 1))]}"
+      fi
+      ;;
+    --config)
+      if (( i + 1 < ${#ARGS[@]} )); then
+        CONFIG_FILE="${ARGS[$((i + 1))]}"
+      fi
+      ;;
+  esac
+done
+
+if [[ -z "$CONFIG_FILE" ]]; then
+  CONFIG_FILE="$PROJECT_DIR/scripts/powerrun.config"
+fi
+
+load_config_file "$CONFIG_FILE"
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --help|-h)
@@ -86,6 +122,7 @@ while [[ $# -gt 0 ]]; do
       ;;
 
     --project-dir) PROJECT_DIR="$2"; shift 2 ;;
+  --config) CONFIG_FILE="$2"; shift 2 ;;
     --autologin-user) AUTOLOGIN_USER="$2"; shift 2 ;;
     --disable-autologin) ENABLE_AUTOLOGIN="false"; shift 1 ;;
     --enable-root-account) ENABLE_ROOT_ACCOUNT="true"; shift 1 ;;
@@ -140,6 +177,7 @@ ENABLE_ROOT_ACCOUNT="$ENABLE_ROOT_ACCOUNT" \
 ROOT_PASSWORD="$ROOT_PASSWORD" \
 START_ON_BOOT="$START_ON_BOOT" \
 START_NOW="$START_NOW" \
+CONFIG_FILE="$CONFIG_FILE" \
 PROJECT_DIR="$PROJECT_DIR" \
 "$SETUP_SCRIPT"
 
@@ -160,4 +198,5 @@ fi
 
 echo ""
 echo "[DONE] Power-run one-shot setup complete."
+echo "Config used: $CONFIG_FILE"
 echo "Recommended final action: reboot Jetson once."
