@@ -137,13 +137,58 @@ curl -sS --max-time 4 http://127.0.0.1:8000/api/camera/stream | head -c 120 | xx
 
 ## 5) Docker full-stack deployment (frontend + backend)
 
-### Step A — Build and run
+### Step A — First-time build (or after Dockerfile/dependency changes)
 
 ```bash
 cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
 docker-compose down --remove-orphans
 docker-compose up -d --build
 docker-compose ps
+```
+
+### Step A.1 — Regular start/stop (no rebuild, recommended for day-to-day use)
+
+Use this path for normal restart cycles. It reuses already-built images and avoids creating new dangling image layers.
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+docker-compose down --remove-orphans
+docker-compose up -d
+docker-compose ps
+```
+
+### Step A.2 — Cleanup dangling images (when `<none>` images accumulate)
+
+If you previously ran many `--build` cycles, old untagged layers will accumulate. Clean them safely with:
+
+```bash
+# Remove dangling images only (safe)
+docker image prune -f
+
+# Optional: remove build cache as well
+docker builder prune -f
+
+# Optional: preview disk usage
+docker system df
+```
+
+Automation note:
+
+- `docker-compose.yml` now includes a `docker-prune` service that automatically runs:
+    - `docker image prune -f`
+    - `docker builder prune -f`
+- Default interval is every `3600` seconds.
+- To tune interval, set env before running compose:
+
+```bash
+export AUTO_PRUNE_INTERVAL_SECONDS=7200
+docker-compose up -d
+```
+
+- To stop auto-prune temporarily:
+
+```bash
+docker-compose stop docker-prune
 ```
 
 ### Step A0 — One-command plug-and-play setup (autologin + boot start + static IP)
