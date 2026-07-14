@@ -22,6 +22,16 @@ Jetson Nano (Backend)              Laptop/Browser (Frontend)
 └─ WebRTC/WebSocket               
 ```
 
+## 📸 Working Screenshots
+
+### Dashboard Overview
+
+![Dashboard Overview](Doc/screenshots/dashboard-overview.png)
+
+### Live Video + Viewer Metrics
+
+![Dashboard Live Video](Doc/screenshots/dashboard-live-video.png)
+
 ## ⚙️ Tech Stack
 
 ### Backend (Jetson Nano)
