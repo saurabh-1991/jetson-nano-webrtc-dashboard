@@ -236,6 +236,10 @@ This removes day-to-day dependency on knowing the numeric IP.
 
 Windows note: if `.local` does not resolve, install Bonjour services, or use static IP fallback.
 
+Safety note: static-IP script now skips interface updates when the target NIC is unavailable
+(for example `eth0` unplugged while using Wi-Fi), so one-command remote setup won't fail
+just because an unused interface is down.
+
 ### Step A0.3 — Rollback to DHCP (if needed)
 
 If static IP causes connectivity problems:

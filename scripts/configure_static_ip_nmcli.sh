@@ -59,6 +59,20 @@ find_active_connection_for_device() {
   nmcli -t -f NAME,DEVICE connection show --active | awk -F: -v d="$dev" '$2==d {print $1; exit}'
 }
 
+device_exists() {
+  local dev="$1"
+  nmcli -t -f DEVICE device status | awk -F: -v d="$dev" '$1==d {found=1} END {exit(found?0:1)}'
+}
+
+device_is_unavailable() {
+  local dev="$1"
+  local state
+  state="$(nmcli -t -f GENERAL.STATE device show "$dev" 2>/dev/null | head -n1 | cut -d: -f2- || true)"
+
+  # Typical unavailable state looks like: "20 (unavailable)"
+  [[ "$state" == *"unavailable"* ]]
+}
+
 ensure_ethernet_connection() {
   local dev="$1"
   local conn
@@ -107,10 +121,17 @@ if [[ -n "$ETH_IP" ]]; then
     echo "[ERROR] Ethernet static config requires --eth-gateway and --eth-dns"
     exit 1
   fi
+
+  if ! device_exists "$ETH_DEVICE"; then
+    echo "[WARN] Ethernet device '$ETH_DEVICE' not found. Skipping Ethernet static IP configuration."
+  elif device_is_unavailable "$ETH_DEVICE"; then
+    echo "[WARN] Ethernet device '$ETH_DEVICE' is unavailable. Skipping Ethernet static IP configuration."
+  else
   ETH_CONN="$(ensure_ethernet_connection "$ETH_DEVICE")"
   apply_static_ipv4 "$ETH_CONN" "$ETH_IP" "$ETH_GATEWAY" "$ETH_DNS"
   nmcli connection up "$ETH_CONN" || true
   echo "[OK] Ethernet static IP applied on $ETH_DEVICE via connection '$ETH_CONN'"
+  fi
 fi
 
 if [[ -n "$WIFI_IP" ]]; then
@@ -118,6 +139,12 @@ if [[ -n "$WIFI_IP" ]]; then
     echo "[ERROR] Wi-Fi static config requires --wifi-ssid --wifi-password --wifi-gateway --wifi-dns"
     exit 1
   fi
+
+  if ! device_exists "$WIFI_DEVICE"; then
+    echo "[WARN] Wi-Fi device '$WIFI_DEVICE' not found. Skipping Wi-Fi static IP configuration."
+  elif device_is_unavailable "$WIFI_DEVICE"; then
+    echo "[WARN] Wi-Fi device '$WIFI_DEVICE' is unavailable. Skipping Wi-Fi static IP configuration."
+  else
 
   WIFI_CONN="$(ensure_wifi_connection "$WIFI_DEVICE" "$WIFI_SSID")"
   nmcli connection modify "$WIFI_CONN" \
@@ -128,6 +155,7 @@ if [[ -n "$WIFI_IP" ]]; then
   apply_static_ipv4 "$WIFI_CONN" "$WIFI_IP" "$WIFI_GATEWAY" "$WIFI_DNS"
   nmcli connection up "$WIFI_CONN" || true
   echo "[OK] Wi-Fi static IP applied on $WIFI_DEVICE via connection '$WIFI_CONN'"
+  fi
 fi
 
 if [[ -z "$ETH_IP" && -z "$WIFI_IP" ]]; then
