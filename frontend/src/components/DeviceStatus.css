@@ -55,6 +55,22 @@
   font-size: 0.82rem;
 }
 
+.input-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.input-title {
+  color: #333;
+  font-weight: 600;
+}
+
+.input-subtitle {
+  color: #6c757d;
+  font-size: 0.75rem;
+}
+
 .indicator-wrap {
   display: inline-flex;
   align-items: center;

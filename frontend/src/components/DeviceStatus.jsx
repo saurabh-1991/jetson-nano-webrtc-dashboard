@@ -70,9 +70,15 @@ export const DeviceStatus = () => {
             <div className="card-content">
               {Object.entries(status.gpio.inputs).map(([key, input]) => {
                 const signalOn = !!input?.signal
+                const pin = input?.pin
                 return (
                   <div className="status-item" key={key}>
-                    <span className="label">{input?.label || key}</span>
+                    <div className="input-meta">
+                      <div className="input-title">{input?.label || key}</div>
+                      <div className="input-subtitle">
+                        {typeof pin === 'number' ? `BOARD Pin ${pin}` : 'Pin not configured'}
+                      </div>
+                    </div>
                     <span className="indicator-wrap">
                       <span
                         className={`input-led ${signalOn ? 'on' : 'off'}`}
