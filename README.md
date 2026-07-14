@@ -24,10 +24,6 @@ Jetson Nano (Backend)              Laptop/Browser (Frontend)
 
 ## 📸 Working Screenshots
 
-### Dashboard Overview
-
-![Dashboard Overview](Doc/screenshots/dashboard-overview.png)
-
 ### Live Video + Viewer Metrics
 
 ![Dashboard Live Video](Doc/screenshots/dashboard-live-video.png)
