@@ -8,6 +8,7 @@ import sys
 import os
 import time
 import uuid
+import subprocess
 from datetime import datetime
 from typing import Any, Dict, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
@@ -50,6 +51,61 @@ logging.basicConfig(
     format=LOG_FORMAT
 )
 logger = logging.getLogger(__name__)
+
+
+def _run_git_command(path: str, args: List[str]) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-c", "safe.directory=*", "-C", path] + args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=1.5,
+            check=False,
+        )
+        if result.returncode == 0:
+            return (result.stdout or "").strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def get_software_version_info() -> Dict[str, str]:
+    """Return software version metadata for operator visibility in UI footer."""
+    env_branch = (os.getenv("APP_GIT_BRANCH") or "").strip()
+    env_commit = (os.getenv("APP_GIT_COMMIT") or "").strip()
+
+    candidate_paths = [
+        "/workspace",
+        "/workspace/backend",
+        "/app",
+    ]
+
+    branch = env_branch
+    commit = env_commit
+
+    if not branch:
+        for path in candidate_paths:
+            branch = _run_git_command(path, ["rev-parse", "--abbrev-ref", "HEAD"])
+            if branch:
+                break
+
+    if not commit:
+        for path in candidate_paths:
+            commit = _run_git_command(path, ["rev-parse", "--short", "HEAD"])
+            if commit:
+                break
+
+    if not branch:
+        branch = "unknown"
+    if not commit:
+        commit = "unknown"
+
+    return {
+        "branch": branch,
+        "commit": commit,
+        "label": f"{branch}@{commit}",
+    }
 
 # Status tracking
 status_broadcast_task = None
@@ -413,6 +469,7 @@ async def system_info():
     return {
         "device": "Jetson Nano",
         "cuda": cuda_info,
+        "software": get_software_version_info(),
         "timestamp": datetime.now().isoformat()
     }
 

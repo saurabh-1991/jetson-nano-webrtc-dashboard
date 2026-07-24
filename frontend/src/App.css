@@ -129,6 +129,12 @@ body {
   margin: 0;
 }
 
+.footer-branch {
+  font-family: 'Monaco', 'Courier New', monospace;
+  font-weight: 700;
+  color: #93c5fd;
+}
+
 /* Responsive Design */
 @media (max-width: 860px) {
   .app-main {

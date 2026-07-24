@@ -1,14 +1,40 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import VideoStream from './components/VideoStream'
 import GPIOControls from './components/GPIOControls'
 import DeviceStatus from './components/DeviceStatus'
 import SensorDataSection from './components/SensorDataSection'
 import ToggleSwitch from './components/ToggleSwitch'
 import TroubleshootLogs from './components/TroubleshootLogs'
+import { systemAPI } from './services/api'
 import './App.css'
 
 function App() {
   const [showLogs, setShowLogs] = useState(false)
+  const [softwareVersion, setSoftwareVersion] = useState('unknown')
+
+  useEffect(() => {
+    let mounted = true
+
+    const refreshSoftwareVersion = async () => {
+      try {
+        const response = await systemAPI.getInfo()
+        const label = response?.data?.software?.label
+        if (mounted && label) {
+          setSoftwareVersion(label)
+        }
+      } catch (_e) {
+        // no-op: keep last known value
+      }
+    }
+
+    refreshSoftwareVersion()
+    const timer = setInterval(refreshSoftwareVersion, 20000)
+
+    return () => {
+      mounted = false
+      clearInterval(timer)
+    }
+  }, [])
 
   return (
     <div className="app-container">
@@ -55,7 +81,9 @@ function App() {
       </main>
 
       <footer className="app-footer">
-        <p>Dashboard v1.0.0 | Powered by FastAPI + React</p>
+        <p>
+          Dashboard v1.2.0 | Branch: <span className="footer-branch">{softwareVersion}</span> | Powered by FastAPI + React
+        </p>
       </footer>
     </div>
   )
