@@ -495,7 +495,7 @@ For production:
 - [Architecture Doc](Doc/jetson_nano_realtime_web_dashboard_architecture.md) - Full architecture
 - [New Local Network Deployment](Doc/new-local-network-deployment.md) - Beginner deployment in a new LAN
 - [UAT Checklist v1.1.0](Doc/UAT-checklist-v1.1.0.md) - Final acceptance test checklist
-- [Operator Quick Card v1.1.0](Doc/operator-quick-card-v1.1.0.md) - Field-ready quick commands
+- [Operator Quick Card v1.2.0](Doc/operator-quick-card-v1.2.0.md) - Field-ready quick commands (with manual camera recovery)
 
 ## 🤝 Contributing
 
