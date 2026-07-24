@@ -3,6 +3,7 @@
 import logging
 import math
 import os
+import threading
 import time
 from collections import deque
 from datetime import datetime, timedelta
@@ -26,6 +27,11 @@ class SensorDataService:
         self._history = deque(maxlen=86400)  # up to ~48h at 2s sampling
         self._last_sample_ts = 0.0
         self._sample_interval_seconds = 2.0
+        self._modbus_failure_backoff_seconds = max(
+            0.5, float(os.getenv("MODBUS_FAILURE_BACKOFF_SECONDS", "5.0"))
+        )
+        self._next_modbus_attempt_ts = 0.0
+        self._sample_lock = threading.Lock()
         self._client = None
         self._simulation_enabled = os.getenv("SENSOR_SIMULATION_ENABLED", "false").lower() in (
             "1", "true", "yes", "on"
@@ -124,7 +130,12 @@ class SensorDataService:
         now = time.time()
         logger_data = None
         if not self._simulation_enabled:
-            logger_data = self._read_from_datalogger()
+            if now >= self._next_modbus_attempt_ts:
+                logger_data = self._read_from_datalogger()
+                if logger_data is None:
+                    self._next_modbus_attempt_ts = now + self._modbus_failure_backoff_seconds
+            else:
+                logger_data = None
 
         if self._simulation_enabled:
             sample = self._fallback_sample(now)
@@ -179,8 +190,31 @@ class SensorDataService:
 
     def _ensure_recent_sample(self):
         now = time.time()
-        if not self._history or (now - self._last_sample_ts) >= self._sample_interval_seconds:
-            self._sample_once()
+        should_sample = (not self._history) or ((now - self._last_sample_ts) >= self._sample_interval_seconds)
+        if not should_sample:
+            return
+
+        if self._sample_lock.acquire(False):
+            try:
+                current = time.time()
+                if not self._history or (current - self._last_sample_ts) >= self._sample_interval_seconds:
+                    self._sample_once()
+            finally:
+                self._sample_lock.release()
+            return
+
+        # Sampling already in progress in another request/thread.
+        # Keep serving previous value to avoid cascading latency.
+        if not self._history:
+            self._history.append(
+                {
+                    "hot_zone_temperature": None,
+                    "cold_zone_temperature": None,
+                    "exhaust_temp": None,
+                    "timestamp": datetime.now().isoformat(),
+                    "source": "sampling_in_progress",
+                }
+            )
 
     def get_latest(self) -> dict:
         self._ensure_recent_sample()

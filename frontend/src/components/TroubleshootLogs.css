@@ -1,0 +1,174 @@
+.logs-panel {
+  margin-top: 1rem;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 10px;
+  border: 1px solid #334155;
+  box-shadow: 0 8px 24px rgba(2, 6, 23, 0.35);
+  overflow: hidden;
+}
+
+.logs-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid #334155;
+  background: #111827;
+}
+
+.logs-panel-header h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.logs-panel-badge {
+  font-size: 0.72rem;
+  color: #93c5fd;
+}
+
+.logs-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.download-logs-btn {
+  border: 1px solid #3b82f6;
+  background: #1d4ed8;
+  color: #eff6ff;
+  border-radius: 6px;
+  padding: 0.32rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.download-logs-btn:hover {
+  background: #2563eb;
+}
+
+.download-logs-btn:active {
+  background: #1e40af;
+}
+
+.logs-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid #334155;
+}
+
+.logs-chip {
+  font-size: 0.72rem;
+  background: #1e293b;
+  border: 1px solid #475569;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  color: #cbd5e1;
+}
+
+.logs-error {
+  margin: 0.6rem 1rem;
+  background: #7f1d1d;
+  color: #fee2e2;
+  border: 1px solid #b91c1c;
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.logs-table-wrap {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.logs-empty {
+  padding: 1rem;
+  font-size: 0.86rem;
+  color: #94a3b8;
+}
+
+.logs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.logs-table th,
+.logs-table td {
+  text-align: left;
+  padding: 0.5rem 0.65rem;
+  border-bottom: 1px solid #1e293b;
+  vertical-align: top;
+}
+
+.log-message-main {
+  color: #f1f5f9;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.log-message-detail {
+  margin-top: 0.2rem;
+  color: #94a3b8;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 0.67rem;
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.logs-table th {
+  position: sticky;
+  top: 0;
+  background: #0b1220;
+  color: #cbd5e1;
+  z-index: 1;
+}
+
+.logs-table tr:hover td {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.sev-pill {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent;
+}
+
+.sev-pill.info {
+  background: #1e3a8a;
+  color: #dbeafe;
+  border-color: #3b82f6;
+}
+
+.sev-pill.warning {
+  background: #78350f;
+  color: #fef3c7;
+  border-color: #f59e0b;
+}
+
+.sev-pill.error {
+  background: #7f1d1d;
+  color: #fee2e2;
+  border-color: #ef4444;
+}
+
+@media (max-width: 768px) {
+  .logs-table {
+    font-size: 0.72rem;
+  }
+
+  .logs-table th,
+  .logs-table td {
+    padding: 0.4rem 0.5rem;
+  }
+}

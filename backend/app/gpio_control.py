@@ -1,6 +1,7 @@
 """GPIO Control for Jetson Nano"""
 
 import logging
+import threading
 from .gpio_devices_config import get_gpio_outputs_config, get_gpio_inputs_config
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ class GPIOController:
         self.outputs_config = get_gpio_outputs_config()
         self.inputs_config = get_gpio_inputs_config()
         self.output_states = {name: False for name in self.outputs_config.keys()}
+        self._state_lock = threading.RLock()
         self.gpio_available = GPIO_AVAILABLE
         
         if self.gpio_available:
@@ -59,7 +61,8 @@ class GPIOController:
 
             pin = self.outputs_config[output_name]["pin"]
             GPIO.output(pin, GPIO.HIGH if is_on else GPIO.LOW)
-            self.output_states[output_name] = bool(is_on)
+            with self._state_lock:
+                self.output_states[output_name] = bool(is_on)
             logger.info("%s turned %s (BOARD pin %s)", output_name, "ON" if is_on else "OFF", pin)
             return True
         except Exception as e:
@@ -76,7 +79,8 @@ class GPIOController:
 
     def toggle_output(self, output_name: str) -> bool:
         """Toggle a named output state."""
-        current_state = self.output_states.get(output_name, False)
+        with self._state_lock:
+            current_state = self.output_states.get(output_name, False)
         return self.set_output(output_name, not current_state)
 
     def get_outputs_state(self) -> dict:
@@ -104,6 +108,24 @@ class GPIOController:
             },
             "inputs": input_signals,
         }
+
+    def any_output_on(self) -> bool:
+        with self._state_lock:
+            return any(bool(v) for v in self.output_states.values())
+
+    def force_all_outputs_off(self, reason: str = "watchdog") -> bool:
+        """Best-effort fail-safe OFF for all configured outputs."""
+        if not self.gpio_available:
+            logger.warning("Fail-safe OFF requested (%s) but GPIO unavailable", reason)
+            return False
+
+        success = True
+        for name in self.outputs_config.keys():
+            if not self.set_output(name, False):
+                success = False
+
+        logger.warning("Fail-safe OFF executed for all outputs. reason=%s success=%s", reason, success)
+        return success
 
     def read_input_signal(self, input_name: str) -> bool:
         """Read a named digital input signal from GPIO."""

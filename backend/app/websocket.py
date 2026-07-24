@@ -145,11 +145,25 @@ def get_device_status() -> dict:
     camera = getattr(camera_module, "camera", None)
     gpio = get_gpio_controller()
     cuda_info = check_cuda_availability()
+    diagnostics = camera.get_runtime_diagnostics() if camera else {}
+    recovery = diagnostics.get("recovery", {}) if diagnostics else {}
+    selected_source = diagnostics.get("selected_pipeline_source") if diagnostics else None
+    selected_pipeline = diagnostics.get("selected_pipeline") if diagnostics else None
     
     return {
         "camera": {
             "is_open": camera.is_open if camera else False,
-            "frame_count": camera.get_frame_count() if camera else 0
+            "frame_count": camera.get_frame_count() if camera else 0,
+            "selected_source": selected_source,
+            "selected_pipeline": selected_pipeline,
+            "recovery": {
+                "attempts": int(recovery.get("attempts", 0)),
+                "successes": int(recovery.get("successes", 0)),
+                "failures": int(recovery.get("failures", 0)),
+                "consecutive_failures": int(recovery.get("consecutive_failures", 0)),
+                "next_recovery_allowed_in_seconds": float(recovery.get("next_recovery_allowed_in_seconds", 0.0)),
+                "last_recovery_reason": recovery.get("last_recovery_reason"),
+            },
         },
         "gpio": gpio.get_outputs_state(),
         "cuda": cuda_info,

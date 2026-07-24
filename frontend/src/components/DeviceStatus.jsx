@@ -1,35 +1,69 @@
 import React, { useState, useEffect } from 'react'
-import { systemAPI } from '../services/api'
+import { cameraAPI, systemAPI } from '../services/api'
 import './DeviceStatus.css'
 
 export const DeviceStatus = () => {
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isRecoveringCamera, setIsRecoveringCamera] = useState(false)
+  const [recoverMessage, setRecoverMessage] = useState('')
   const [error, setError] = useState(null)
 
-  useEffect(() => {
-    const fetchStatus = async () => {
-      try {
-        setIsRefreshing(true)
-        const response = await systemAPI.getStatus()
-        setStatus(response.data)
-        setError(null)
-      } catch (err) {
-        console.error('Failed to fetch device status:', err)
-        setError('Failed to load device status')
-      } finally {
-        setIsRefreshing(false)
-        setLoading(false)
-      }
+  const fetchStatus = async () => {
+    try {
+      setIsRefreshing(true)
+      const response = await systemAPI.getStatus()
+      setStatus(response.data)
+      setError(null)
+    } catch (err) {
+      console.error('Failed to fetch device status:', err)
+      setError('Failed to load device status')
+    } finally {
+      setIsRefreshing(false)
+      setLoading(false)
     }
+  }
 
+  useEffect(() => {
     // Fetch immediately and then every 5 seconds
     fetchStatus()
     const interval = setInterval(fetchStatus, 5000)
 
     return () => clearInterval(interval)
   }, [])
+
+  const handleManualRecoverCamera = async () => {
+    if (isRecoveringCamera) {
+      return
+    }
+
+    if (camera?.is_open) {
+      const confirmed = window.confirm(
+        'Camera appears active. Resetting it may briefly interrupt the live stream. Continue?'
+      )
+      if (!confirmed) {
+        return
+      }
+    }
+
+    try {
+      setIsRecoveringCamera(true)
+      setRecoverMessage('Recovering camera...')
+      const response = await cameraAPI.recover('manual_operator_button')
+      const ok = !!response?.data?.success
+      setRecoverMessage(ok ? 'Camera recovery completed.' : 'Camera recovery attempted (still unavailable).')
+      await fetchStatus()
+    } catch (recoverError) {
+      console.error('Failed to recover camera:', recoverError)
+      setRecoverMessage('Camera recovery request failed.')
+    } finally {
+      setIsRecoveringCamera(false)
+      setTimeout(() => {
+        setRecoverMessage('')
+      }, 4500)
+    }
+  }
 
   if (loading) {
     return <div className="device-status-container">Loading...</div>
@@ -38,6 +72,22 @@ export const DeviceStatus = () => {
   if (error) {
     return <div className="device-status-container error">{error}</div>
   }
+
+  const camera = status?.camera || {}
+  const recovery = camera?.recovery || {}
+  const recoveryFailures = Number(recovery?.failures || 0)
+  const consecutiveRecoveryFailures = Number(recovery?.consecutive_failures || 0)
+  const recoveryState = consecutiveRecoveryFailures > 0
+    ? 'degraded'
+    : recoveryFailures > 0
+      ? 'warning'
+      : 'healthy'
+
+  const recoveryStateText = recoveryState === 'degraded'
+    ? 'Degraded'
+    : recoveryState === 'warning'
+      ? 'Recovered'
+      : 'Healthy'
 
   return (
     <div className="device-status-container">
@@ -49,16 +99,53 @@ export const DeviceStatus = () => {
           <div className="status-card">
             <div className="card-title">Camera</div>
             <div className="card-content">
-              <div className="status-item">
-                <span className="label">Status:</span>
-                <span className={`value ${status.camera.is_open ? 'active' : 'inactive'}`}>
+              <div className="camera-primary-stats">
+                <span className={`camera-stat-chip ${status.camera.is_open ? 'ok' : 'bad'}`}>
                   {status.camera.is_open ? 'Active' : 'Inactive'}
                 </span>
+                <span className={`health-badge ${recoveryState}`}>{recoveryStateText}</span>
+                <span className="camera-stat-chip neutral">Frames: {status.camera.frame_count}</span>
+                <button
+                  type="button"
+                  className="camera-recover-btn"
+                  onClick={handleManualRecoverCamera}
+                  disabled={isRecoveringCamera}
+                  title="Manual camera recovery if auto-recovery does not restore stream"
+                >
+                  {isRecoveringCamera ? 'Recovering…' : 'Reset Camera'}
+                </button>
               </div>
-              <div className="status-item">
-                <span className="label">Frames:</span>
-                <span className="value">{status.camera.frame_count}</span>
+
+              {recoverMessage && (
+                <div className="camera-recover-feedback">{recoverMessage}</div>
+              )}
+
+              <div className="camera-meta-line">
+                <span className="label">Active Device:</span>
+                <span className="value value-small">{camera?.selected_source || 'Not selected yet'}</span>
               </div>
+
+              <div className="camera-recovery-grid">
+                <div className="camera-recovery-item">
+                  <span className="label">Attempts</span>
+                  <span className="value">{Number(recovery?.attempts || 0)}</span>
+                </div>
+                <div className="camera-recovery-item">
+                  <span className="label">Successes</span>
+                  <span className="value">{Number(recovery?.successes || 0)}</span>
+                </div>
+                <div className="camera-recovery-item">
+                  <span className="label">Failures</span>
+                  <span className={`value ${recoveryFailures > 0 ? 'inactive' : 'active'}`}>{recoveryFailures}</span>
+                </div>
+              </div>
+
+              {recovery?.last_recovery_reason && (
+                <div className="camera-meta-line">
+                  <span className="label">Last Recovery:</span>
+                  <span className="value value-small">{recovery.last_recovery_reason}</span>
+                </div>
+              )}
             </div>
           </div>
         )}

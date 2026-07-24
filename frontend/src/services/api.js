@@ -9,11 +9,56 @@ export const api = axios.create({
   timeout: 5000,
 })
 
+const logEvent = (type, message, severity = 'info', meta = {}) => {
+  try {
+    if (typeof window !== 'undefined' && typeof window.__jetsonLogEvent === 'function') {
+      window.__jetsonLogEvent(type, message, severity, meta)
+    }
+  } catch (_e) {
+    // no-op
+  }
+}
+
+api.interceptors.request.use(
+  (config) => {
+    config.metadata = { startedAt: Date.now() }
+    return config
+  },
+  (error) => {
+    logEvent('api_request_error', error?.message || 'request setup failed', 'error')
+    return Promise.reject(error)
+  }
+)
+
+api.interceptors.response.use(
+  (response) => {
+    const startedAt = response?.config?.metadata?.startedAt || Date.now()
+    const durationMs = Date.now() - startedAt
+    logEvent('api_response', `${response?.config?.method || 'get'} ${response?.config?.url || ''}`, 'info', {
+      status: response?.status,
+      durationMs,
+    })
+    return response
+  },
+  (error) => {
+    const startedAt = error?.config?.metadata?.startedAt || Date.now()
+    const durationMs = Date.now() - startedAt
+    logEvent('api_response_error', error?.message || 'api error', 'error', {
+      status: error?.response?.status,
+      url: error?.config?.url,
+      method: error?.config?.method,
+      durationMs,
+    })
+    return Promise.reject(error)
+  }
+)
+
 // Camera endpoints
 export const cameraAPI = {
   getInfo: () => api.get('/camera/info'),
   getFrame: () => api.get('/camera/frame'),
   getStream: () => `${API_BASE}/api/camera/stream`,
+  recover: (reason = 'manual_operator_recover') => api.post('/camera/recover', { reason }),
 }
 
 // GPIO endpoints
@@ -44,6 +89,11 @@ export const sensorAPI = {
     api.get(`/sensors/history?limit=${limit}&interval_minutes=${intervalMinutes}&hours=${hours}`),
   getSimulationMode: () => api.get('/sensors/simulation'),
   setSimulationMode: (enabled) => api.post('/sensors/simulation', { enabled }),
+}
+
+// Diagnostics / event logs endpoints
+export const eventsAPI = {
+  getRecent: () => api.get('/events/recent'),
 }
 
 // WebRTC endpoints

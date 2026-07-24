@@ -28,6 +28,10 @@ Jetson Nano (Backend)              Laptop/Browser (Frontend)
 
 ![Dashboard Live Video](Doc/screenshots/dashboard-live-video.png)
 
+### Operations View (v1.2.0)
+
+![Dashboard Operations v1.2.0](Doc/screenshots/dashboard-v1.2.0-ops.png)
+
 ## ⚙️ Tech Stack
 
 ### Backend (Jetson Nano)
@@ -93,6 +97,7 @@ For detailed Jetson Nano deployment steps, including both Docker Compose and nat
 
 ## 🧭 Branch and release guidance
 
+- Current production hardening + operator controls branch: `poc_demo_v1.2.0`
 - Stable deployment branch for latest plug-and-play flow: `poc_demo_v1.1.0`
 - Earlier deployment baseline: `poc_demo_v1.0.0`
 
@@ -101,9 +106,50 @@ Recommended branch sync on Jetson:
 ```bash
 cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
 git fetch origin
-git checkout -B poc_demo_v1.1.0 origin/poc_demo_v1.1.0
-git reset --hard origin/poc_demo_v1.1.0
+git checkout -B poc_demo_v1.2.0 origin/poc_demo_v1.2.0
+git reset --hard origin/poc_demo_v1.2.0
 ```
+
+## 🆕 What’s included in `poc_demo_v1.2.0`
+
+- Camera reliability + fail-safe hardening:
+  - automatic alternate `/dev/video*` fallback when default device cannot open
+  - consecutive frame-read failure detection with controlled camera cycle
+  - adaptive/exponential recovery backoff to prevent retry storms
+- Manual operator recovery control:
+  - `POST /api/camera/recover` to force a clean camera reinitialize
+  - tiny `Reset Camera` button in dashboard with active-stream confirmation prompt
+- Better troubleshooting + operational visibility:
+  - camera health badge (`Healthy` / `Recovered` / `Degraded`)
+  - active camera device display (example: `/dev/video1`)
+  - recovery counters and last-recovery reason in status card
+- Extended rolling diagnostics:
+  - backend/frontend event logging with retention and safety watchdog hooks
+
+## 🔁 Production resilience checks (power/network/deployment)
+
+Recommended checks after each deployment or site power/network event:
+
+1. **Auto-start after reboot/power loss**
+   - Ensure docker and dashboard service are enabled on target:
+     - `systemctl is-enabled docker`
+     - `systemctl status jetson-dashboard.service --no-pager`
+   - Verify containers auto-restart policy is `unless-stopped`.
+
+2. **Network reachability after boot**
+   - Validate local health:
+     - `curl http://127.0.0.1:8000/health`
+   - Validate LAN access from remote laptop:
+     - `http://<jetson-ip>/`
+     - `http://<mdns-hostname>.local/` (if enabled)
+
+3. **Remote deployment continuity**
+   - From remote host: `git fetch`, `checkout/reset` target branch, `docker-compose up -d --build`
+   - Validate: `docker-compose ps` and dashboard open in browser.
+
+4. **Camera fail-safe operation**
+   - Start stream and confirm fallback to MJPEG when WebRTC is unavailable.
+   - If camera stalls, use `Reset Camera` and confirm stream recovers.
 
 ## 🆕 What’s included in `poc_demo_v1.1.0`
 
@@ -283,6 +329,7 @@ Useful endpoints after deployment:
 - `GET /api/stats` — viewer counts + camera perf metrics
 - `GET /api/camera/info` — pipeline/runtime diagnostics
 - `POST /api/camera/stop` — explicit stop/release request (with optional `stream_session_id`)
+- `POST /api/camera/recover` — manual camera recover/reinitialize action for operators
 
 ## 📱 Features
 
@@ -487,6 +534,6 @@ This project is provided as-is for educational and commercial use.
 
 ---
 
-**Version**: 1.0.0  
-**Last Updated**: 2026-05-28  
+**Version**: 1.2.0  
+**Last Updated**: 2026-07-24  
 **Status**: Production Ready ✅

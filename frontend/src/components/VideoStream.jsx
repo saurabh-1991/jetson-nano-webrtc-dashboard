@@ -20,6 +20,9 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
   const [liveStats, setLiveStats] = useState(null)
   const [statsError, setStatsError] = useState(false)
   const pcRef = useRef(null)
+  const fallbackActiveRef = useRef(false)
+  const mjpegRetryTimerRef = useRef(null)
+  const mjpegRetryCountRef = useRef(0)
 
   const getBaseUrl = () => apiBaseUrl || (
     import.meta.env.DEV
@@ -37,8 +40,17 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
     }
   }
 
+  const clearMjpegRetryTimer = () => {
+    if (mjpegRetryTimerRef.current) {
+      clearTimeout(mjpegRetryTimerRef.current)
+      mjpegRetryTimerRef.current = null
+    }
+  }
+
   const startMJPEGFallback = (baseUrl, reason) => {
+    fallbackActiveRef.current = true
     closePeerConnection()
+    clearMjpegRetryTimer()
 
     setNotice(reason || 'Using MJPEG fallback stream')
     setStreamMode('mjpeg')
@@ -61,6 +73,9 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
     setIsConnecting(true)
     setError(null)
     setNotice(null)
+    fallbackActiveRef.current = false
+    clearMjpegRetryTimer()
+    mjpegRetryCountRef.current = 0
 
     const baseUrl = getBaseUrl()
     let usedMjpegFallback = false
@@ -95,6 +110,10 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
 
       // Handle connection state
       pc.onconnectionstatechange = () => {
+        if (fallbackActiveRef.current) {
+          return
+        }
+
         setConnectionState(pc.connectionState)
         if (pc.connectionState === 'connected') {
           setIsConnected(true)
@@ -107,14 +126,29 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
 
-      const response = await fetch(`${baseUrl}/api/webrtc/offer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sdp: offer.sdp,
-          type: offer.type
+      const offerController = new AbortController()
+      const offerTimeout = setTimeout(() => {
+        try {
+          offerController.abort()
+        } catch (_e) {
+          // no-op
+        }
+      }, 4500)
+
+      let response
+      try {
+        response = await fetch(`${baseUrl}/api/webrtc/offer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: offerController.signal,
+          body: JSON.stringify({
+            sdp: offer.sdp,
+            type: offer.type
+          })
         })
-      })
+      } finally {
+        clearTimeout(offerTimeout)
+      }
 
       if (!response.ok) {
         if (response.status === 503) {
@@ -150,6 +184,9 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
 
   const disconnect = () => {
     const baseUrl = getBaseUrl()
+    clearMjpegRetryTimer()
+    fallbackActiveRef.current = false
+    mjpegRetryCountRef.current = 0
     closePeerConnection()
     if (imgRef.current) {
       imgRef.current.src = ''
@@ -285,16 +322,35 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
   }
 
   const onMjpegLoaded = () => {
+    clearMjpegRetryTimer()
+    mjpegRetryCountRef.current = 0
     setIsConnected(true)
     setIsConnecting(false)
     setConnectionState('connected')
   }
 
   const onMjpegError = () => {
+    const baseUrl = getBaseUrl()
+    const nextAttempt = mjpegRetryCountRef.current + 1
+    mjpegRetryCountRef.current = nextAttempt
+
     setIsConnected(false)
-    setIsConnecting(false)
-    setConnectionState('failed')
-    setError('Failed to load MJPEG stream from backend')
+    setIsConnecting(true)
+    setConnectionState('connecting')
+
+    const retryDelayMs = Math.min(1500 * nextAttempt, 6000)
+    setError(`MJPEG stream load failed, retrying (${nextAttempt})...`)
+
+    clearMjpegRetryTimer()
+    mjpegRetryTimerRef.current = setTimeout(() => {
+      if (!fallbackActiveRef.current) {
+        return
+      }
+
+      setMjpegUrl(
+        `${baseUrl}/api/camera/stream?sid=${encodeURIComponent(streamSessionIdRef.current)}&t=${Date.now()}`
+      )
+    }, retryDelayMs)
   }
 
   const pollLiveStats = async () => {
@@ -323,6 +379,7 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
 
     return () => {
       clearInterval(timer)
+      clearMjpegRetryTimer()
       disconnect()
     }
   }, [])

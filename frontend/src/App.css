@@ -82,6 +82,12 @@ body {
   gap: 1rem;
 }
 
+.logs-toggle-row {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .dashboard-section {
   display: flex;
   flex-direction: column;
@@ -134,6 +140,10 @@ body {
     gap: 1.5rem;
   }
 
+  .logs-toggle-row {
+    justify-content: flex-start;
+  }
+
   .dashboard-section.full-width {
     grid-column: 1;
   }
@@ -168,6 +178,10 @@ body {
   .dashboard-grid {
     grid-template-columns: 1fr;
     gap: 1rem;
+  }
+
+  .logs-toggle-row {
+    margin-top: 0.8rem;
   }
 }
 

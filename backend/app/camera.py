@@ -5,6 +5,7 @@ import re
 import subprocess
 import time
 import threading
+import glob
 import cv2
 import numpy as np
 from .config import (
@@ -64,9 +65,71 @@ class CameraCapture:
         self._jpeg_cache_misses = 0
         self._jpeg_encode_total_ms = 0.0
         self._jpeg_encode_count = 0
+        self._read_failure_count = 0
+        self._max_consecutive_read_failures = 4
+        self._recovery_attempt_count = 0
+        self._recovery_success_count = 0
+        self._recovery_failed_count = 0
+        self._consecutive_recovery_failures = 0
+        self._recovery_base_backoff_seconds = 1.5
+        self._recovery_backoff_max_seconds = 20.0
+        self._next_recovery_allowed_ts = 0.0
+        self._last_recovery_ts = None
+        self._last_recovery_reason = None
         self.opencv_gstreamer_enabled = self._check_opencv_gstreamer_support()
         self._detect_cuda_capability()
         self._initialize_camera()
+
+    def _record_recovery_result(self, success: bool, reason: str):
+        """Track recovery outcomes and apply adaptive backoff on repeated failures."""
+        now_ts = time.time()
+        self._last_recovery_ts = now_ts
+        self._last_recovery_reason = reason
+
+        if success:
+            self._recovery_success_count += 1
+            self._consecutive_recovery_failures = 0
+            self._next_recovery_allowed_ts = 0.0
+            return
+
+        self._recovery_failed_count += 1
+        self._consecutive_recovery_failures += 1
+        backoff_seconds = min(
+            self._recovery_backoff_max_seconds,
+            self._recovery_base_backoff_seconds * (2 ** max(0, self._consecutive_recovery_failures - 1)),
+        )
+        self._next_recovery_allowed_ts = now_ts + backoff_seconds
+        logger.warning(
+            "Camera recovery failed (reason=%s). consecutive_failures=%s next_retry_in=%.2fs",
+            reason,
+            self._consecutive_recovery_failures,
+            backoff_seconds,
+        )
+
+    def _attempt_recovery_locked(self, reason: str) -> bool:
+        """Attempt to recover camera while holding frame lock."""
+        now_ts = time.time()
+        if now_ts < self._next_recovery_allowed_ts:
+            return False
+
+        self._recovery_attempt_count += 1
+        logger.info("Attempting camera recovery #%s (%s)", self._recovery_attempt_count, reason)
+        self._initialize_camera()
+        success = bool(self.is_open and self.cap is not None)
+        self._record_recovery_result(success, reason)
+        return success
+
+    def _discover_v4l2_devices(self) -> list:
+        """Discover available /dev/video* nodes sorted by numeric index."""
+        devices = []
+        for path in glob.glob("/dev/video*"):
+            match = re.match(r"^/dev/video(\d+)$", path)
+            if not match:
+                continue
+            devices.append((int(match.group(1)), path))
+
+        devices.sort(key=lambda item: item[0])
+        return [path for _, path in devices]
 
     def _check_opencv_gstreamer_support(self) -> bool:
         """Detect whether OpenCV build has GStreamer backend enabled."""
@@ -524,6 +587,14 @@ class CameraCapture:
     def _initialize_camera(self):
         """Initialize camera capture"""
         try:
+            if self.cap is not None:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                self.cap = None
+            self.is_open = False
+
             self.last_camera_error = None
             self.startup_probe_scores = {}
             self.startup_probe_order = []
@@ -627,6 +698,19 @@ class CameraCapture:
                     )
                 )
 
+                # Additional fallback for hosts where the active camera is not /dev/video0.
+                discovered_devices = self._discover_v4l2_devices()
+                for device_path in discovered_devices:
+                    if device_path == CAMERA_DEVICE:
+                        continue
+                    fallback_sources.append(
+                        (
+                            device_path,
+                            None,
+                            f"V4L2 alternate device (direct) {device_path}",
+                        )
+                    )
+
             tried_sources = set()
             for source, backend, label in fallback_sources:
                 dedupe_key = "{0}|{1}".format(source, backend)
@@ -703,10 +787,12 @@ class CameraCapture:
         Returns:
             tuple: (success, frame) where frame is processed BGR image
         """
-        if not self.is_open or self.cap is None:
-            return False, None
-
         with self._frame_lock:
+            if not self.is_open or self.cap is None:
+                self._attempt_recovery_locked("camera_closed_on_frame_request")
+                if not self.is_open or self.cap is None:
+                    return False, None
+
             now = time.perf_counter()
             self._last_client_access_ts = time.time()
 
@@ -723,11 +809,34 @@ class CameraCapture:
                 ret, frame = self.cap.read()
 
                 if not ret or frame is None:
-                    logger.warning("Failed to read frame from camera")
-                    self.release()
+                    self._read_failure_count += 1
+                    logger.warning(
+                        "Failed to read frame from camera (consecutive_failures=%s)",
+                        self._read_failure_count,
+                    )
+
+                    if self._read_failure_count >= self._max_consecutive_read_failures:
+                        logger.warning(
+                            "Consecutive camera frame failures reached threshold (%s). Cycling camera.",
+                            self._max_consecutive_read_failures,
+                        )
+                        if self.cap is not None:
+                            try:
+                                self.cap.release()
+                            except Exception:
+                                pass
+                        self.cap = None
+                        self.is_open = False
+                        self._last_frame = None
+                        self._last_jpeg_bytes = None
+                        self._last_jpeg_frame_count = -1
+                        self._last_frame_timestamp = 0.0
+                        self._attempt_recovery_locked("consecutive_frame_read_failures")
+
                     return False, None
 
                 self.frame_count += 1
+                self._read_failure_count = 0
                 self._frame_cache_misses += 1
 
                 # Process frame using CUDA if available
@@ -935,6 +1044,19 @@ class CameraCapture:
             "startup_probe_scores": self.startup_probe_scores,
             "startup_probe_order": self.startup_probe_order,
             "last_camera_error": self.last_camera_error,
+            "recovery": {
+                "attempts": self._recovery_attempt_count,
+                "successes": self._recovery_success_count,
+                "failures": self._recovery_failed_count,
+                "consecutive_failures": self._consecutive_recovery_failures,
+                "consecutive_read_failures": self._read_failure_count,
+                "max_consecutive_read_failures": self._max_consecutive_read_failures,
+                "next_recovery_allowed_in_seconds": max(0.0, self._next_recovery_allowed_ts - time.time())
+                if self._next_recovery_allowed_ts
+                else 0.0,
+                "last_recovery_ts": self._last_recovery_ts,
+                "last_recovery_reason": self._last_recovery_reason,
+            },
             "performance": self.get_performance_stats(),
         }
 

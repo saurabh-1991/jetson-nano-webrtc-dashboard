@@ -6,12 +6,14 @@ import asyncio
 import signal
 import sys
 import os
+import time
 import uuid
 from datetime import datetime
-from typing import List
+from typing import Any, Dict, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
 from .config import API_DEBUG, LOG_LEVEL, LOG_FORMAT
 from .camera import get_camera, check_cuda_availability
@@ -19,6 +21,7 @@ from . import camera as camera_module
 from .gpio_control import get_gpio_controller
 from . import gpio_control as gpio_module
 from .sensor_data import get_sensor_data_service
+from .event_logger import get_event_logger
 from .websocket import (
     handle_websocket_connection,
     get_device_status,
@@ -51,9 +54,21 @@ logger = logging.getLogger(__name__)
 # Status tracking
 status_broadcast_task = None
 camera_idle_watchdog_task = None
+safety_watchdog_task = None
 active_mjpeg_sessions = set()
 active_mjpeg_lock = asyncio.Lock()
 CAMERA_IDLE_RELEASE_SECONDS = max(3, int(os.getenv("CAMERA_IDLE_RELEASE_SECONDS", "6")))
+
+CONTROL_HEARTBEAT_TIMEOUT_SECONDS = max(
+    5, int(os.getenv("CONTROL_HEARTBEAT_TIMEOUT_SECONDS", "20"))
+)
+EVENT_LOG_COMPACT_SECONDS = max(5, int(os.getenv("EVENT_LOG_COMPACT_SECONDS", "10")))
+
+last_frontend_heartbeat_ts = 0.0
+frontend_heartbeat_seen = False
+last_control_activity_ts = time.time()
+safety_reset_count = 0
+next_event_compact_ts = 0.0
 
 
 async def camera_idle_watchdog():
@@ -87,6 +102,53 @@ async def camera_idle_watchdog():
             raise
         except Exception as e:
             logger.warning(f"Camera idle watchdog error: {e}")
+
+
+async def safety_watchdog_loop():
+    """Apply fail-safe GPIO OFF when heartbeat/control path appears unhealthy."""
+    global safety_reset_count, next_event_compact_ts
+
+    event_log = get_event_logger()
+    while True:
+        try:
+            await asyncio.sleep(1.0)
+            now_ts = time.time()
+
+            # Keep on-disk event file compacted to retention window.
+            if now_ts >= next_event_compact_ts:
+                event_log.compact_now()
+                next_event_compact_ts = now_ts + EVENT_LOG_COMPACT_SECONDS
+
+            if not frontend_heartbeat_seen:
+                continue
+
+            stale_frontend = (now_ts - last_frontend_heartbeat_ts) > CONTROL_HEARTBEAT_TIMEOUT_SECONDS
+            stale_control = (now_ts - last_control_activity_ts) > CONTROL_HEARTBEAT_TIMEOUT_SECONDS
+
+            if stale_frontend and stale_control:
+                gpio = get_gpio_controller()
+                if gpio.any_output_on():
+                    success = gpio.force_all_outputs_off(reason="safety_watchdog_timeout")
+                    safety_reset_count += 1
+                    event_log.log_event(
+                        source="backend",
+                        event_type="safety_watchdog_reset",
+                        severity="warning",
+                        payload={
+                            "success": bool(success),
+                            "timeout_seconds": CONTROL_HEARTBEAT_TIMEOUT_SECONDS,
+                            "safety_reset_count": safety_reset_count,
+                        },
+                    )
+                    logger.warning(
+                        "Safety watchdog triggered fail-safe reset. success=%s count=%s",
+                        success,
+                        safety_reset_count,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Safety watchdog loop error: %s", e)
 
 
 def cleanup_resources():
@@ -131,16 +193,19 @@ app = FastAPI(
 # Startup and shutdown handlers (compatible with Python 3.6)
 @app.on_event("startup")
 async def on_startup():
-    global status_broadcast_task, camera_idle_watchdog_task
+    global status_broadcast_task, camera_idle_watchdog_task, safety_watchdog_task
     logger.info("Starting Jetson Nano Dashboard backend")
     status_broadcast_task = asyncio.ensure_future(broadcast_device_status())
     camera_idle_watchdog_task = asyncio.ensure_future(camera_idle_watchdog())
+    safety_watchdog_task = asyncio.ensure_future(safety_watchdog_loop())
+    get_event_logger().log_event("backend", "startup", "info", {"version": "1.0.0"})
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    global status_broadcast_task, camera_idle_watchdog_task
+    global status_broadcast_task, camera_idle_watchdog_task, safety_watchdog_task
     logger.info("Shutting down Jetson Nano Dashboard backend")
+    get_event_logger().log_event("backend", "shutdown", "info", {})
     if status_broadcast_task:
         status_broadcast_task.cancel()
         try:
@@ -151,6 +216,12 @@ async def on_shutdown():
         camera_idle_watchdog_task.cancel()
         try:
             await camera_idle_watchdog_task
+        except asyncio.CancelledError:
+            pass
+    if safety_watchdog_task:
+        safety_watchdog_task.cancel()
+        try:
+            await safety_watchdog_task
         except asyncio.CancelledError:
             pass
 
@@ -168,6 +239,68 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _is_control_path(path: str) -> bool:
+    return path.startswith("/api/gpio") or path.startswith("/api/system/status")
+
+
+@app.middleware("http")
+async def request_event_middleware(request: Request, call_next):
+    """Log backend request telemetry and track control path liveness."""
+    global last_control_activity_ts
+
+    started = time.time()
+    path = request.url.path
+    method = request.method
+
+    try:
+        response = await call_next(request)
+        duration_ms = round((time.time() - started) * 1000.0, 2)
+        client_host = request.client.host if request.client else None
+
+        if _is_control_path(path) and response.status_code < 500:
+            last_control_activity_ts = time.time()
+
+        if path.startswith("/api"):
+            if response.status_code >= 500:
+                severity = "error"
+            elif response.status_code >= 400:
+                severity = "warning"
+            else:
+                severity = "info"
+
+            get_event_logger().log_event(
+                source="backend",
+                event_type="api_request",
+                severity=severity,
+                payload={
+                    "message": f"{method} {path} -> {int(response.status_code)} in {duration_ms} ms",
+                    "method": method,
+                    "path": path,
+                    "status": int(response.status_code),
+                    "duration_ms": duration_ms,
+                    "client_host": client_host,
+                },
+            )
+        return response
+    except Exception as exc:
+        duration_ms = round((time.time() - started) * 1000.0, 2)
+        client_host = request.client.host if request.client else None
+        get_event_logger().log_event(
+            source="backend",
+            event_type="api_exception",
+            severity="error",
+            payload={
+                "message": f"{method} {path} failed in {duration_ms} ms: {exc}",
+                "method": method,
+                "path": path,
+                "duration_ms": duration_ms,
+                "error": str(exc),
+                "client_host": client_host,
+            },
+        )
+        raise
 
 
 # ==================== ROOT ENDPOINTS ====================
@@ -197,6 +330,80 @@ async def health():
     }
 
 
+@app.post("/api/safety/heartbeat")
+async def safety_heartbeat(payload: Dict[str, Any] = None):
+    """Heartbeat from frontend to prove control UI loop is alive."""
+    global last_frontend_heartbeat_ts, frontend_heartbeat_seen
+
+    payload = payload or {}
+    frontend_heartbeat_seen = True
+    last_frontend_heartbeat_ts = time.time()
+
+    get_event_logger().log_event(
+        source="frontend",
+        event_type="heartbeat",
+        severity="info",
+        payload={
+            "message": "Frontend heartbeat received",
+            "session_id": payload.get("session_id"),
+            "connection_state": payload.get("connection_state"),
+        },
+    )
+    return {"ok": True, "timestamp": datetime.now().isoformat()}
+
+
+@app.post("/api/events/frontend")
+async def ingest_frontend_events(payload: Dict[str, Any]):
+    """Ingest frontend event batch for 2-minute rolling diagnostics."""
+    events = payload.get("events") or []
+    if not isinstance(events, list):
+        raise HTTPException(status_code=400, detail="events must be an array")
+
+    event_log = get_event_logger()
+    accepted = 0
+    for item in events[:300]:
+        if not isinstance(item, dict):
+            continue
+        event_log.log_event(
+            source="frontend",
+            event_type=str(item.get("type", "frontend_event")),
+            severity=str(item.get("severity", "info")),
+            payload={
+                "message": item.get("message"),
+                "meta": item.get("meta", {}),
+                "at": item.get("at"),
+                "session_id": payload.get("session_id"),
+            },
+        )
+        accepted += 1
+
+    return {
+        "accepted": accepted,
+        "retention_seconds": get_event_logger().get_meta().get("retention_seconds", 120),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/events/recent")
+async def get_recent_events():
+    """Get recent backend/frontend events retained in rolling 2-minute window."""
+    event_log = get_event_logger()
+    return {
+        "meta": event_log.get_meta(),
+        "events": event_log.get_recent_events(),
+        "safety": {
+            "frontend_heartbeat_seen": frontend_heartbeat_seen,
+            "last_frontend_heartbeat_age_seconds": round(max(0.0, time.time() - last_frontend_heartbeat_ts), 2)
+            if last_frontend_heartbeat_ts > 0
+            else None,
+            "last_control_activity_age_seconds": round(max(0.0, time.time() - last_control_activity_ts), 2),
+            "watchdog_timeout_seconds": CONTROL_HEARTBEAT_TIMEOUT_SECONDS,
+            "safety_reset_count": safety_reset_count,
+        },
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
 # ==================== SYSTEM INFO ENDPOINTS ====================
 
 @app.get("/api/system/info")
@@ -214,7 +421,8 @@ async def system_info():
 async def system_status():
     """Get complete system status"""
     status = get_device_status()
-    status["sensors"] = get_sensor_data_service().get_latest()
+    sensor_service = get_sensor_data_service()
+    status["sensors"] = await run_in_threadpool(sensor_service.get_latest)
     status["timestamp"] = datetime.now().isoformat()
     return status
 
@@ -223,7 +431,7 @@ async def system_status():
 async def sensors_latest():
     """Get latest sensor readings from datalogger abstraction."""
     service = get_sensor_data_service()
-    sensors = service.get_latest()
+    sensors = await run_in_threadpool(service.get_latest)
     return {
         "sensors": sensors,
         "simulation_enabled": service.is_simulation_enabled(),
@@ -235,10 +443,11 @@ async def sensors_latest():
 async def sensors_history(limit: int = 120, interval_minutes: int = 1, hours: int = 24):
     """Get recent sensor reading history for graph plotting."""
     service = get_sensor_data_service()
-    history = service.get_history(
-        limit=limit,
-        interval_minutes=interval_minutes,
-        hours=hours,
+    history = await run_in_threadpool(
+        service.get_history,
+        limit,
+        interval_minutes,
+        hours,
     )
     return {
         "history": history,
@@ -338,14 +547,88 @@ async def stop_camera(request: dict = None):
     }
 
 
+@app.post("/api/camera/recover")
+async def recover_camera(request: dict = None):
+    """Force camera release and reinitialize for manual operator recovery."""
+    request = request or {}
+    reason = str(request.get("reason") or "manual_operator_recover")
+
+    async with active_mjpeg_lock:
+        mjpeg_clients = len(active_mjpeg_sessions)
+
+    webrtc_connections = 0
+    if is_webrtc_available():
+        try:
+            webrtc_connections = get_webrtc_manager_safe().get_connection_count()
+        except Exception:
+            webrtc_connections = 0
+
+    camera = getattr(camera_module, "camera", None)
+    was_open = bool(camera and camera.is_open)
+    forced_release = False
+
+    if camera is not None:
+        try:
+            camera.release()
+            forced_release = True
+        except Exception:
+            forced_release = False
+        camera_module.camera = None
+
+    # Create a fresh camera instance.
+    new_camera = get_camera()
+    recovered = bool(new_camera and new_camera.is_open)
+    diagnostics = new_camera.get_runtime_diagnostics() if new_camera else {}
+
+    get_event_logger().log_event(
+        source="backend",
+        event_type="camera_manual_recover",
+        severity="info" if recovered else "warning",
+        payload={
+            "message": (
+                "Manual camera recovery succeeded"
+                if recovered
+                else "Manual camera recovery failed"
+            ),
+            "reason": reason,
+            "was_open": was_open,
+            "forced_release": forced_release,
+            "active_mjpeg_clients": mjpeg_clients,
+            "active_webrtc_clients": webrtc_connections,
+            "selected_source": diagnostics.get("selected_pipeline_source"),
+        },
+    )
+
+    return {
+        "success": recovered,
+        "reason": reason,
+        "was_open": was_open,
+        "forced_release": forced_release,
+        "active_mjpeg_clients": mjpeg_clients,
+        "active_webrtc_clients": webrtc_connections,
+        "camera": {
+            "is_open": recovered,
+            "selected_source": diagnostics.get("selected_pipeline_source"),
+            "selected_pipeline": diagnostics.get("selected_pipeline"),
+            "recovery": diagnostics.get("recovery"),
+        },
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
 @app.get("/api/camera/frame")
 async def get_frame():
     """Get single frame as JPEG"""
     camera = get_camera()
+    if not camera.is_open:
+        raise HTTPException(
+            status_code=503,
+            detail="Camera is unavailable. Verify camera device mapping and try again."
+        )
 
     success, jpeg_bytes = camera.get_jpeg_frame(quality=80)
     if not success or jpeg_bytes is None:
-        raise HTTPException(status_code=500, detail="Failed to capture frame")
+        raise HTTPException(status_code=503, detail="Failed to capture frame from camera")
 
     return StreamingResponse(
         iter([jpeg_bytes]),
@@ -356,6 +639,13 @@ async def get_frame():
 @app.get("/api/camera/stream")
 async def stream_mjpeg(request: Request):
     """Stream video as MJPEG (fallback for low-latency needs)"""
+    startup_camera = get_camera()
+    if not startup_camera.is_open:
+        raise HTTPException(
+            status_code=503,
+            detail="Camera is unavailable. Verify camera device mapping and retry stream."
+        )
+
     async def generate():
         stream_session_id = request.query_params.get("sid") or str(uuid.uuid4())
         camera = get_camera()
@@ -455,11 +745,24 @@ async def gpio_output_on(output_name: str):
     """Turn a named GPIO output on."""
     gpio = get_gpio_controller()
     result = gpio.turn_output_on(output_name)
+    state = gpio.get_outputs_state()
+
+    get_event_logger().log_event(
+        source="backend",
+        event_type="gpio_output_on",
+        severity="info" if result else "warning",
+        payload={
+            "message": f"GPIO output '{output_name}' set to ON ({'success' if result else 'failed'})",
+            "output": output_name,
+            "result": bool(result),
+            "state": state.get("outputs", {}).get(output_name),
+        },
+    )
 
     return {
         "success": result,
         "output": output_name,
-        "gpio": gpio.get_outputs_state(),
+        "gpio": state,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -469,11 +772,24 @@ async def gpio_output_off(output_name: str):
     """Turn a named GPIO output off."""
     gpio = get_gpio_controller()
     result = gpio.turn_output_off(output_name)
+    state = gpio.get_outputs_state()
+
+    get_event_logger().log_event(
+        source="backend",
+        event_type="gpio_output_off",
+        severity="info" if result else "warning",
+        payload={
+            "message": f"GPIO output '{output_name}' set to OFF ({'success' if result else 'failed'})",
+            "output": output_name,
+            "result": bool(result),
+            "state": state.get("outputs", {}).get(output_name),
+        },
+    )
 
     return {
         "success": result,
         "output": output_name,
-        "gpio": gpio.get_outputs_state(),
+        "gpio": state,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -483,11 +799,24 @@ async def gpio_output_toggle(output_name: str):
     """Toggle a named GPIO output."""
     gpio = get_gpio_controller()
     result = gpio.toggle_output(output_name)
+    state = gpio.get_outputs_state()
+
+    get_event_logger().log_event(
+        source="backend",
+        event_type="gpio_output_toggle",
+        severity="info" if result else "warning",
+        payload={
+            "message": f"GPIO output '{output_name}' toggled ({'success' if result else 'failed'})",
+            "output": output_name,
+            "result": bool(result),
+            "state": state.get("outputs", {}).get(output_name),
+        },
+    )
 
     return {
         "success": result,
         "output": output_name,
-        "gpio": gpio.get_outputs_state(),
+        "gpio": state,
         "timestamp": datetime.now().isoformat()
     }
 

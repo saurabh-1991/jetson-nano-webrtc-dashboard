@@ -1,11 +1,15 @@
-import React from 'react'
+import React, { useState } from 'react'
 import VideoStream from './components/VideoStream'
 import GPIOControls from './components/GPIOControls'
 import DeviceStatus from './components/DeviceStatus'
 import SensorDataSection from './components/SensorDataSection'
+import ToggleSwitch from './components/ToggleSwitch'
+import TroubleshootLogs from './components/TroubleshootLogs'
 import './App.css'
 
 function App() {
+  const [showLogs, setShowLogs] = useState(false)
+
   return (
     <div className="app-container">
       <header className="app-header">
@@ -38,6 +42,16 @@ function App() {
             <SensorDataSection />
           </section>
         </div>
+
+        <div className="logs-toggle-row">
+          <ToggleSwitch
+            label="Show Troubleshooting Logs"
+            isOn={showLogs}
+            handleToggle={() => setShowLogs((prev) => !prev)}
+          />
+        </div>
+
+        <TroubleshootLogs enabled={showLogs} />
       </main>
 
       <footer className="app-footer">
