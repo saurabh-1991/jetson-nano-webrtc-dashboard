@@ -28,11 +28,18 @@ function App() {
     }
 
     refreshSoftwareVersion()
-    const timer = setInterval(refreshSoftwareVersion, 20000)
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshSoftwareVersion()
+      }
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChange)
 
     return () => {
       mounted = false
-      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [])
 
