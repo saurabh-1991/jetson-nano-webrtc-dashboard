@@ -7,7 +7,6 @@ services:
       context: ./backend
       dockerfile: Dockerfile.jetpack46
     container_name: jetson-nano-backend
-    runtime: nvidia
     ports:
       - "8000:8000"
     environment:
