@@ -19,6 +19,7 @@ ENABLE_ROOT_ACCOUNT="${ENABLE_ROOT_ACCOUNT:-false}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-}"
 START_ON_BOOT="${START_ON_BOOT:-true}"
 START_NOW="${START_NOW:-true}"
+COMPOSE_REBUILD_ON_BOOT="${COMPOSE_REBUILD_ON_BOOT:-false}"
 ENABLE_MDNS="${ENABLE_MDNS:-true}"
 MDNS_HOSTNAME="${MDNS_HOSTNAME:-jetson-dashboard}"
 
@@ -80,8 +81,15 @@ configure_mdns_discovery() {
   if ! command -v avahi-daemon >/dev/null 2>&1; then
     echo "[INFO] Installing mDNS packages (avahi-daemon, libnss-mdns, avahi-utils)"
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -y
-    apt-get install -y avahi-daemon libnss-mdns avahi-utils
+    if ! apt-get update -y || ! apt-get install -y avahi-daemon libnss-mdns avahi-utils; then
+      echo "[WARN] Unable to install mDNS packages (likely offline apt mirror)."
+      echo "[WARN] Continuing without mDNS package install. Use static IP access as fallback."
+    fi
+  fi
+
+  if ! command -v avahi-daemon >/dev/null 2>&1; then
+    echo "[WARN] avahi-daemon still unavailable; skipping mDNS setup."
+    return
   fi
 
   if [[ -n "$MDNS_HOSTNAME" ]]; then
@@ -120,9 +128,11 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${PROJECT_DIR}
-ExecStart=/usr/bin/docker-compose -f ${PROJECT_DIR}/docker-compose.yml up -d
-ExecStop=/usr/bin/docker-compose -f ${PROJECT_DIR}/docker-compose.yml down
-TimeoutStartSec=0
+Environment=COMPOSE_REBUILD=${COMPOSE_REBUILD_ON_BOOT}
+ExecStartPre=/bin/chmod +x ${PROJECT_DIR}/scripts/run_backend_with_nvidia_runtime.sh
+ExecStart=/bin/bash ${PROJECT_DIR}/scripts/run_backend_with_nvidia_runtime.sh
+ExecStop=/bin/bash -lc '/usr/bin/docker rm -f jetson-nano-backend >/dev/null 2>&1 || true; /usr/bin/docker-compose -f ${PROJECT_DIR}/docker-compose.yml down'
+TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target

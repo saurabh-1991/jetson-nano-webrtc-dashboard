@@ -4,23 +4,46 @@ set -euo pipefail
 # Purpose:
 # - Keep regular docker-compose workflow for frontend/aux services
 # - Replace ONLY backend container with a runtime=nvidia equivalent
-# - Preserve dual-camera mode and current env tuning
+# - Preserve dual-camera mode and validated acceleration tuning
 #
 # Usage (on Jetson):
 #   chmod +x scripts/run_backend_with_nvidia_runtime.sh
 #   ./scripts/run_backend_with_nvidia_runtime.sh
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NETWORK_NAME="jetsonnanowebrtcdashboard_jetson-network"
+NETWORK_NAME="${NETWORK_NAME:-}"
 BACKEND_NAME="jetson-nano-backend"
 BACKEND_IMAGE="jetsonnanowebrtcdashboard_jetson-backend:latest"
+COMPOSE_REBUILD="${COMPOSE_REBUILD:-false}"
 
 cd "$PROJECT_DIR"
 
 echo "[nvidia-runtime] Ensuring compose services are up..."
 # If a previously manual NVIDIA backend exists, remove it first so compose can proceed.
 docker rm -f "$BACKEND_NAME" >/dev/null 2>&1 || true
-docker-compose up -d --build
+if [[ "$COMPOSE_REBUILD" == "true" ]]; then
+  echo "[nvidia-runtime] Compose mode: rebuild images"
+  docker-compose up -d --build
+else
+  echo "[nvidia-runtime] Compose mode: no-build (offline-safe)"
+  if ! docker-compose up -d --no-build; then
+    echo "[nvidia-runtime] WARN: '--no-build' unsupported on this compose version, retrying with plain up -d"
+    docker-compose up -d
+  fi
+fi
+
+if [[ -z "$NETWORK_NAME" ]]; then
+  NETWORK_NAME="$(docker inspect "$BACKEND_NAME" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' 2>/dev/null || true)"
+fi
+if [[ -z "$NETWORK_NAME" ]]; then
+  NETWORK_NAME="jetsonnanowebrtcdashboard_jetson-network"
+fi
+
+if ! docker image inspect "$BACKEND_IMAGE" >/dev/null 2>&1; then
+  echo "[nvidia-runtime] ERROR: Backend image missing: $BACKEND_IMAGE"
+  echo "[nvidia-runtime] Run once with COMPOSE_REBUILD=true when internet/build deps are available."
+  exit 1
+fi
 
 echo "[nvidia-runtime] Replacing backend container with --runtime nvidia..."
 docker rm -f "$BACKEND_NAME" >/dev/null 2>&1 || true
@@ -31,6 +54,7 @@ docker run -d \
   --privileged \
   --restart unless-stopped \
   --network "$NETWORK_NAME" \
+  --network-alias jetson-backend \
   -p 8000:8000 \
   -v /dev:/dev \
   -v "$PROJECT_DIR/backend:/app" \
@@ -42,10 +66,19 @@ docker run -d \
   -e CAMERA_ENABLED_IDS=cam1,cam2 \
   -e CAMERA_STRICT_CAMERA_IDS=true \
   -e CAMERA_ACCELERATION=auto \
+  -e CAMERA1_ACCELERATION=direct \
+  -e CAMERA2_ACCELERATION=hardware \
   -e CAMERA_USB_STARTUP_PROBE=true \
+  -e CAMERA1_USB_STARTUP_PROBE=false \
+  -e CAMERA2_USB_STARTUP_PROBE=false \
+  -e CAMERA2_USB_PREFLIGHT_VALIDATE=true \
+  -e CAMERA2_USB_HW_MODE_LOCK=true \
+  -e CAMERA2_USB_V4L2_IO_MODE=2 \
   -e CAMERA1_FPS=20 \
-  -e CAMERA2_FPS=15 \
-  -e CAMERA_BUFFER_FLUSH_GRABS=5 \
+  -e CAMERA2_FPS=20 \
+  -e CAMERA2_JPEG_QUALITY=66 \
+  -e CAMERA_BUFFER_FLUSH_GRABS=1 \
+  -e CAMERA_DIRECT_V4L2_TUNE=true \
   -e CAMERA1_AUTO_BRIGHTNESS=true \
   -e CAMERA2_AUTO_BRIGHTNESS=true \
   -e CUDA_ENABLED=true \
@@ -56,6 +89,11 @@ docker run -d \
 echo "[nvidia-runtime] Waiting for backend..."
 sleep 2
 
+if ! docker ps --format '{{.Names}}' | grep -q "^${BACKEND_NAME}$"; then
+  echo "[nvidia-runtime] ERROR: backend container did not start"
+  exit 1
+fi
+
 echo "[nvidia-runtime] Runtime:"
 docker inspect "$BACKEND_NAME" --format 'runtime={{.HostConfig.Runtime}}'
 
@@ -65,9 +103,14 @@ docker exec "$BACKEND_NAME" sh -lc '
   gst-inspect-1.0 nvvidconv >/dev/null 2>&1 && echo "nvvidconv=OK" || echo "nvvidconv=MISS"
 '
 
+echo "[nvidia-runtime] OpenCV capability probe inside backend:"
+docker exec "$BACKEND_NAME" python3 -c "import cv2; info=cv2.getBuildInformation(); print('cv2_file', cv2.__file__); print('cv2_version', cv2.__version__); print('has_cuda_mod', hasattr(cv2,'cuda')); print('cuda_devices', cv2.cuda.getCudaEnabledDeviceCount() if hasattr(cv2,'cuda') else 0); print('gstreamer_declared_yes', ('GStreamer: YES' in info) or ('GStreamer:                   YES' in info))"
+
 echo "[nvidia-runtime] Health + camera availability:"
 curl -sS http://127.0.0.1:8000/health ; echo
 curl -sS http://127.0.0.1:8000/api/camera/enabled ; echo
+curl -sS "http://127.0.0.1:8000/api/camera/info?camera_id=cam1&create_if_missing=true" ; echo
+curl -sS "http://127.0.0.1:8000/api/camera/info?camera_id=cam2&create_if_missing=true" ; echo
 
 warmup_frame_check() {
   local camera_id="$1"

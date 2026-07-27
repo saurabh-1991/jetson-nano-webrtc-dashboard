@@ -28,6 +28,7 @@ ENABLE_ROOT_ACCOUNT="false"
 ROOT_PASSWORD=""
 START_ON_BOOT="true"
 START_NOW="true"
+COMPOSE_REBUILD_ON_BOOT="false"
 ENABLE_MDNS="true"
 MDNS_HOSTNAME="jetson-dashboard"
 
@@ -56,6 +57,7 @@ Boot/service options:
   --root-password <password>
   --disable-start-on-boot         (default: enabled)
   --disable-start-now             (default: enabled)
+  --enable-rebuild-on-boot        (default: disabled / offline-safe no-build)
   --disable-mdns                  (default: enabled)
   --mdns-hostname <hostname>      (default: jetson-dashboard)
 
@@ -133,6 +135,7 @@ while [[ $# -gt 0 ]]; do
     --root-password) ROOT_PASSWORD="$2"; shift 2 ;;
     --disable-start-on-boot) START_ON_BOOT="false"; shift 1 ;;
     --disable-start-now) START_NOW="false"; shift 1 ;;
+    --enable-rebuild-on-boot) COMPOSE_REBUILD_ON_BOOT="true"; shift 1 ;;
     --disable-mdns) ENABLE_MDNS="false"; shift 1 ;;
     --mdns-hostname) MDNS_HOSTNAME="$2"; shift 2 ;;
 
@@ -183,6 +186,7 @@ ENABLE_ROOT_ACCOUNT="$ENABLE_ROOT_ACCOUNT" \
 ROOT_PASSWORD="$ROOT_PASSWORD" \
 START_ON_BOOT="$START_ON_BOOT" \
 START_NOW="$START_NOW" \
+COMPOSE_REBUILD_ON_BOOT="$COMPOSE_REBUILD_ON_BOOT" \
 ENABLE_MDNS="$ENABLE_MDNS" \
 MDNS_HOSTNAME="$MDNS_HOSTNAME" \
 CONFIG_FILE="$CONFIG_FILE" \
