@@ -599,7 +599,15 @@ class CameraCapture:
             w, h, fps = mode
             # OpenCV 3.2 (JP4.6 apt build) does not always support the 2-argument
             # VideoCapture constructor in Python bindings.
-            cap = cv2.VideoCapture(camera_index)
+            cap = None
+            cap_v4l2 = getattr(cv2, "CAP_V4L2", None)
+            if cap_v4l2 is not None:
+                try:
+                    cap = cv2.VideoCapture(camera_index, cap_v4l2)
+                except Exception:
+                    cap = None
+            if cap is None:
+                cap = cv2.VideoCapture(camera_index)
             if cap is None or not cap.isOpened():
                 if cap is not None:
                     cap.release()
@@ -1111,7 +1119,14 @@ class CameraCapture:
             # Direct V4L2 fallback handling for /dev/videoN device paths.
             # Some OpenCV builds may treat '/dev/video0' as an image sequence path when backend is unspecified.
             if backend is None and isinstance(source, str) and source.startswith("/dev/video"):
-                cap = cv2.VideoCapture(source)
+                cap_v4l2 = getattr(cv2, "CAP_V4L2", None)
+                if cap_v4l2 is not None:
+                    try:
+                        cap = cv2.VideoCapture(source, cap_v4l2)
+                    except Exception:
+                        cap = None
+                if cap is None:
+                    cap = cv2.VideoCapture(source)
 
                 if cap is None or not cap.isOpened():
                     try:
@@ -1125,7 +1140,13 @@ class CameraCapture:
                                 cap.release()
                         except Exception:
                             pass
-                        cap = cv2.VideoCapture(camera_index)
+                        if cap_v4l2 is not None:
+                            try:
+                                cap = cv2.VideoCapture(camera_index, cap_v4l2)
+                            except Exception:
+                                cap = None
+                        if cap is None:
+                            cap = cv2.VideoCapture(camera_index)
             elif backend is None:
                 cap = cv2.VideoCapture(source)
             else:

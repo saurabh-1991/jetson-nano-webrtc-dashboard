@@ -15,6 +15,7 @@ ENV LC_ALL=C.UTF-8
 # Ensure media plugins + runtime deps are present
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    v4l-utils \
     libavcodec-dev \
     libavformat-dev \
     libavdevice-dev \
