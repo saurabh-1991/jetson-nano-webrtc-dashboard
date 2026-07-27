@@ -157,6 +157,26 @@ docker-compose up -d
 docker-compose ps
 ```
 
+### Step A.1b — Dual-camera + NVIDIA runtime backend (compose-compatible workaround)
+
+If your Jetson `docker-compose` version does not support `runtime: nvidia` in YAML,
+use the helper script below after normal compose startup.
+
+It keeps frontend/services in compose, but recreates backend with `--runtime nvidia`
+while preserving dual-camera env settings.
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+chmod +x scripts/run_backend_with_nvidia_runtime.sh
+./scripts/run_backend_with_nvidia_runtime.sh
+```
+
+Validation expected:
+
+- backend runtime prints `runtime=nvidia`
+- plugin probe shows `nvjpegdec=OK` and `nvvidconv=OK`
+- `/health` and `/api/camera/enabled` return healthy with both cameras enabled
+
 ### Step A.2 — Cleanup dangling images (when `<none>` images accumulate)
 
 If you previously ran many `--build` cycles, old untagged layers will accumulate. Clean them safely with:
