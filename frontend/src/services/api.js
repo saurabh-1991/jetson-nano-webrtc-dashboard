@@ -55,10 +55,11 @@ api.interceptors.response.use(
 
 // Camera endpoints
 export const cameraAPI = {
-  getInfo: () => api.get('/camera/info'),
-  getFrame: () => api.get('/camera/frame'),
-  getStream: () => `${API_BASE}/api/camera/stream`,
-  recover: (reason = 'manual_operator_recover') => api.post('/camera/recover', { reason }),
+  getInfo: (cameraId = 'cam1') => api.get(`/camera/info?camera_id=${encodeURIComponent(cameraId)}`),
+  getFrame: (cameraId = 'cam1') => api.get(`/camera/frame?camera_id=${encodeURIComponent(cameraId)}`),
+  getStream: (cameraId = 'cam1') => `${API_BASE}/api/camera/stream?camera_id=${encodeURIComponent(cameraId)}`,
+  recover: (reason = 'manual_operator_recover', cameraId = 'cam1') =>
+    api.post('/camera/recover', { reason, camera_id: cameraId }),
 }
 
 // GPIO endpoints

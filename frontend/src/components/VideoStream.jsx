@@ -1,7 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react'
 import './VideoStream.css'
 
-export const VideoStream = ({ apiBaseUrl = '' }) => {
+export const VideoStream = ({
+  apiBaseUrl = '',
+  cameraId = 'cam1',
+  startLabel = 'Start Video',
+  stopLabel = 'Stop Video',
+  forceMjpeg = false,
+}) => {
   const videoRef = useRef(null)
   const imgRef = useRef(null)
   const popoutRef = useRef(null)
@@ -61,7 +67,7 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
 
     // timestamp prevents stale browser cache
     setMjpegUrl(
-      `${baseUrl}/api/camera/stream?sid=${encodeURIComponent(streamSessionIdRef.current)}&t=${Date.now()}`
+      `${baseUrl}/api/camera/stream?camera_id=${encodeURIComponent(cameraId)}&sid=${encodeURIComponent(streamSessionIdRef.current)}&t=${Date.now()}`
     )
   }
 
@@ -81,6 +87,12 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
     let usedMjpegFallback = false
 
     try {
+      if (forceMjpeg) {
+        usedMjpegFallback = true
+        startMJPEGFallback(baseUrl, 'Using MJPEG mode for this camera')
+        return
+      }
+
       setStreamMode('webrtc')
 
       // Create peer connection
@@ -143,7 +155,8 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
           signal: offerController.signal,
           body: JSON.stringify({
             sdp: offer.sdp,
-            type: offer.type
+            type: offer.type,
+            camera_id: cameraId,
           })
         })
       } finally {
@@ -209,6 +222,7 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        camera_id: cameraId,
         stream_session_id: streamSessionIdRef.current
       })
     }).catch((err) => {
@@ -218,7 +232,7 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
 
   const openLargeView = () => {
     const baseUrl = getBaseUrl()
-    const streamUrl = `${baseUrl}/api/camera/stream?t=${Date.now()}`
+    const streamUrl = `${baseUrl}/api/camera/stream?camera_id=${encodeURIComponent(cameraId)}&t=${Date.now()}`
     const dashboardUrl = window.location.href
 
     const popup = window.open(
@@ -348,7 +362,7 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
       }
 
       setMjpegUrl(
-        `${baseUrl}/api/camera/stream?sid=${encodeURIComponent(streamSessionIdRef.current)}&t=${Date.now()}`
+        `${baseUrl}/api/camera/stream?camera_id=${encodeURIComponent(cameraId)}&sid=${encodeURIComponent(streamSessionIdRef.current)}&t=${Date.now()}`
       )
     }, retryDelayMs)
   }
@@ -364,7 +378,8 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
       }
 
       const stats = await response.json()
-      setLiveStats(stats)
+      const cameraStats = stats?.cameras?.[cameraId] || null
+      setLiveStats({ ...stats, cameraScoped: cameraStats })
       setStatsError(false)
     } catch (err) {
       setStatsError(true)
@@ -384,10 +399,10 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
     }
   }, [])
 
-  const mjpegViewers = Number(liveStats?.active_mjpeg_clients || 0)
+  const mjpegViewers = Number(liveStats?.cameraScoped?.active_mjpeg_clients ?? 0)
   const webrtcViewers = Number(liveStats?.webrtc_connections || 0)
-  const totalViewers = mjpegViewers + webrtcViewers
-  const cameraPerf = liveStats?.camera_performance || null
+  const totalViewers = mjpegViewers + (forceMjpeg ? 0 : webrtcViewers)
+  const cameraPerf = liveStats?.cameraScoped?.camera_performance || liveStats?.camera_performance || null
   const frameHitRatio = cameraPerf?.frame_cache?.hit_ratio
   const jpegHitRatio = cameraPerf?.jpeg_cache?.hit_ratio
   const avgEncodeMs = cameraPerf?.jpeg_encode?.avg_ms
@@ -446,14 +461,14 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
             disabled={isConnecting}
             className="btn btn-primary"
           >
-            {isConnecting ? 'Connecting...' : 'Start Video'}
+            {isConnecting ? 'Connecting...' : startLabel}
           </button>
         ) : (
           <button
             onClick={disconnect}
             className="btn btn-danger"
           >
-            Stop Video
+            {stopLabel}
           </button>
         )}
 
@@ -482,7 +497,7 @@ export const VideoStream = ({ apiBaseUrl = '' }) => {
           Viewers: {totalViewers}
         </span>
         <span className="metrics-chip">MJPEG: {mjpegViewers}</span>
-        <span className="metrics-chip">WebRTC: {webrtcViewers}</span>
+        {!forceMjpeg && <span className="metrics-chip">WebRTC: {webrtcViewers}</span>}
         <span className="metrics-chip">Frame Cache: {toPct(frameHitRatio)}</span>
         <span className="metrics-chip">JPEG Cache: {toPct(jpegHitRatio)}</span>
         <span className="metrics-chip">Avg JPEG Encode: {toMs(avgEncodeMs)}</span>

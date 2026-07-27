@@ -7,6 +7,12 @@ CAMERA_DEVICE = "/dev/video0"
 CAMERA_WIDTH = 1280
 CAMERA_HEIGHT = 720
 CAMERA_FPS = 30
+CAMERA2_DEVICE = os.getenv("CAMERA2_DEVICE", "/dev/video1")
+CAMERA2_WIDTH = int(os.getenv("CAMERA2_WIDTH", "640"))
+CAMERA2_HEIGHT = int(os.getenv("CAMERA2_HEIGHT", "480"))
+CAMERA2_FPS = int(os.getenv("CAMERA2_FPS", "20"))
+CAMERA_DEFAULT_ID = os.getenv("CAMERA_DEFAULT_ID", "cam1").lower()
+CAMERA2_DEVICE_HINT = os.getenv("CAMERA2_DEVICE_HINT", "arducam,ir")
 CAMERA_SOURCE = os.getenv("CAMERA_SOURCE", "usb").lower()  # usb | csi
 CAMERA_ACCELERATION = os.getenv("CAMERA_ACCELERATION", "auto").lower()  # auto | hardware | compat
 CAMERA_USB_STARTUP_PROBE = os.getenv("CAMERA_USB_STARTUP_PROBE", "true").lower() in (
@@ -24,6 +30,25 @@ except (TypeError, ValueError):
 if CAMERA_ACCELERATION not in ("auto", "hardware", "compat"):
     CAMERA_ACCELERATION = "auto"
 
+CAMERA_PROFILES = {
+    "cam1": {
+        "device": os.getenv("CAMERA1_DEVICE", CAMERA_DEVICE),
+        "width": int(os.getenv("CAMERA1_WIDTH", str(CAMERA_WIDTH))),
+        "height": int(os.getenv("CAMERA1_HEIGHT", str(CAMERA_HEIGHT))),
+        "fps": int(os.getenv("CAMERA1_FPS", str(CAMERA_FPS))),
+    },
+    "cam2": {
+        "device": CAMERA2_DEVICE,
+        "width": CAMERA2_WIDTH,
+        "height": CAMERA2_HEIGHT,
+        "fps": CAMERA2_FPS,
+    },
+}
+
+CAMERA_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA_BUFFER_FLUSH_GRABS", "2")))
+
+GST_APPSINK_REALTIME = "appsink drop=1 max-buffers=1 sync=false enable-last-sample=false"
+
 # GStreamer Pipeline Configuration
 # USB MJPEG + NVIDIA accelerated decode path (nvjpegdec + nvvidconv)
 USB_GST_PIPELINE_HW = (
@@ -35,7 +60,8 @@ USB_GST_PIPELINE_HW = (
     "video/x-raw, format=BGRx ! "
     "videoconvert ! "
     "video/x-raw, format=BGR ! "
-    "appsink drop=1 max-buffers=1 sync=false"
+    "queue leaky=downstream max-size-buffers=1 ! "
+    + GST_APPSINK_REALTIME
 )
 
 # USB MJPEG compatibility path (software jpegdec)
@@ -45,7 +71,8 @@ USB_GST_PIPELINE_COMPAT = (
     "jpegdec ! "
     "videoconvert ! "
     "video/x-raw, format=BGR ! "
-    "appsink drop=1 max-buffers=1 sync=false"
+    "queue leaky=downstream max-size-buffers=1 ! "
+    + GST_APPSINK_REALTIME
 )
 
 # USB raw YUV + hardware conversion paths (NVIDIA documented v4l2src + nvvidconv flow)
@@ -58,7 +85,8 @@ USB_GST_PIPELINE_RAW_HW_UYVY = (
     "video/x-raw, format=BGRx ! "
     "videoconvert ! "
     "video/x-raw, format=BGR ! "
-    "appsink drop=1 max-buffers=1 sync=false"
+    "queue leaky=downstream max-size-buffers=1 ! "
+    + GST_APPSINK_REALTIME
 )
 
 USB_GST_PIPELINE_RAW_HW_YUY2 = (
@@ -70,7 +98,8 @@ USB_GST_PIPELINE_RAW_HW_YUY2 = (
     "video/x-raw, format=BGRx ! "
     "videoconvert ! "
     "video/x-raw, format=BGR ! "
-    "appsink drop=1 max-buffers=1 sync=false"
+    "queue leaky=downstream max-size-buffers=1 ! "
+    + GST_APPSINK_REALTIME
 )
 
 USB_GST_PIPELINE_COMPAT_RAW = (
@@ -78,7 +107,8 @@ USB_GST_PIPELINE_COMPAT_RAW = (
     f"video/x-raw,width={CAMERA_WIDTH},height={CAMERA_HEIGHT},framerate={CAMERA_FPS}/1 ! "
     "videoconvert ! "
     "video/x-raw, format=BGR ! "
-    "appsink drop=1 max-buffers=1 sync=false"
+    "queue leaky=downstream max-size-buffers=1 ! "
+    + GST_APPSINK_REALTIME
 )
 
 # Most permissive USB fallback (avoid strict caps, let camera pick mode)
@@ -86,7 +116,8 @@ USB_GST_PIPELINE_COMPAT_ANY = (
     f"v4l2src device={CAMERA_DEVICE} ! "
     "videoconvert ! "
     "video/x-raw, format=BGR ! "
-    "appsink drop=1 max-buffers=1 sync=false"
+    "queue leaky=downstream max-size-buffers=1 ! "
+    + GST_APPSINK_REALTIME
 )
 
 CSI_GST_PIPELINE = (
@@ -96,7 +127,8 @@ CSI_GST_PIPELINE = (
     "video/x-raw, format=BGRx ! "
     "videoconvert ! "
     "video/x-raw, format=BGR ! "
-    "appsink drop=1 max-buffers=1 sync=false"
+    "queue leaky=downstream max-size-buffers=1 ! "
+    + GST_APPSINK_REALTIME
 )
 
 if CAMERA_ACCELERATION == "compat":

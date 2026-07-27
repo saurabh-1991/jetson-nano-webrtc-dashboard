@@ -11,9 +11,15 @@ import numpy as np
 from .config import (
     CAMERA_ACCELERATION,
     CAMERA_DEVICE,
+    CAMERA_DEFAULT_ID,
+    CAMERA_BUFFER_FLUSH_GRABS,
     CAMERA_FPS,
+    CAMERA_HEIGHT,
+    CAMERA2_DEVICE_HINT,
+    CAMERA_PROFILES,
     CAMERA_SOURCE,
     CAMERA_USB_STARTUP_PROBE,
+    CAMERA_WIDTH,
     CUDA_ENABLED,
     GST_PIPELINE,
     GST_PIPELINE_IS_OVERRIDE,
@@ -29,14 +35,52 @@ from .config import (
 logger = logging.getLogger(__name__)
 
 
+def _discover_v4l2_devices_static() -> list:
+    devices = []
+    for path in glob.glob("/dev/video*"):
+        match = re.match(r"^/dev/video(\d+)$", path)
+        if not match:
+            continue
+        devices.append((int(match.group(1)), path))
+    devices.sort(key=lambda item: item[0])
+    return [path for _, path in devices]
+
+
+def _resolve_camera2_device_from_hint(default_device: str) -> str:
+    hint_tokens = [tok.strip().lower() for tok in str(CAMERA2_DEVICE_HINT or "").split(",") if tok.strip()]
+    if not hint_tokens:
+        return default_device
+
+    for dev_path in _discover_v4l2_devices_static():
+        dev_name = dev_path.replace("/dev/", "")
+        sys_name_path = f"/sys/class/video4linux/{dev_name}/name"
+        try:
+            with open(sys_name_path, "r", encoding="utf-8", errors="ignore") as f:
+                friendly_name = (f.read() or "").strip().lower()
+            if all(token in friendly_name for token in hint_tokens):
+                logger.info("Resolved cam2 device by hint '%s': %s (%s)", CAMERA2_DEVICE_HINT, dev_path, friendly_name)
+                return dev_path
+        except Exception:
+            continue
+
+    return default_device
+
+
 class CameraCapture:
     """Capture video from camera using GStreamer and OpenCV"""
 
-    def __init__(self):
+    def __init__(self, camera_id: str = "cam1", profile: dict = None):
+        profile = profile or {}
+        self.camera_id = (camera_id or "cam1").lower()
+        self.camera_device = str(profile.get("device") or CAMERA_DEVICE)
+        self.capture_width = int(profile.get("width") or CAMERA_WIDTH)
+        self.capture_height = int(profile.get("height") or CAMERA_HEIGHT)
+        self.capture_fps = max(1, int(profile.get("fps") or CAMERA_FPS))
+        self.buffer_flush_grabs = max(0, int(CAMERA_BUFFER_FLUSH_GRABS))
         self.cap = None
         self.is_open = False
         self.frame_count = 0
-        self.target_fps = max(1, int(CAMERA_FPS))
+        self.target_fps = self.capture_fps
         self.frame_interval_seconds = 1.0 / float(self.target_fps)
         self.cuda_enabled = False
         self.cuda_available = False
@@ -121,15 +165,7 @@ class CameraCapture:
 
     def _discover_v4l2_devices(self) -> list:
         """Discover available /dev/video* nodes sorted by numeric index."""
-        devices = []
-        for path in glob.glob("/dev/video*"):
-            match = re.match(r"^/dev/video(\d+)$", path)
-            if not match:
-                continue
-            devices.append((int(match.group(1)), path))
-
-        devices.sort(key=lambda item: item[0])
-        return [path for _, path in devices]
+        return _discover_v4l2_devices_static()
 
     def _check_opencv_gstreamer_support(self) -> bool:
         """Detect whether OpenCV build has GStreamer backend enabled."""
@@ -148,7 +184,7 @@ class CameraCapture:
     def _build_usb_pipeline_mjpeg_compat(self, width: int, height: int, fps: int) -> str:
         """Build a software-compatible MJPEG pipeline known to work with OpenCV appsink."""
         return (
-            f"v4l2src device={CAMERA_DEVICE} ! "
+            f"v4l2src device={self.camera_device} ! "
             f"image/jpeg,width={width},height={height},framerate={fps}/1 ! "
             "jpegdec ! "
             "videoconvert ! "
@@ -159,7 +195,7 @@ class CameraCapture:
     def _build_usb_pipeline_yuy2_compat(self, width: int, height: int, fps: int) -> str:
         """Build a software-compatible YUY2 pipeline known to work with OpenCV appsink."""
         return (
-            f"v4l2src device={CAMERA_DEVICE} ! "
+            f"v4l2src device={self.camera_device} ! "
             f"video/x-raw,format=YUY2,width={width},height={height},framerate={fps}/1 ! "
             "videoconvert ! "
             "video/x-raw, format=BGR ! "
@@ -193,7 +229,7 @@ class CameraCapture:
 
         try:
             result = subprocess.run(
-                ["v4l2-ctl", "--device", CAMERA_DEVICE, "--list-formats-ext"],
+                ["v4l2-ctl", "--device", self.camera_device, "--list-formats-ext"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 universal_newlines=True,
@@ -305,8 +341,8 @@ class CameraCapture:
 
         camera_index = 0
         try:
-            if isinstance(CAMERA_DEVICE, str) and CAMERA_DEVICE.startswith("/dev/video"):
-                camera_index = int(CAMERA_DEVICE.replace("/dev/video", ""))
+            if isinstance(self.camera_device, str) and self.camera_device.startswith("/dev/video"):
+                camera_index = int(self.camera_device.replace("/dev/video", ""))
         except Exception:
             camera_index = 0
 
@@ -332,7 +368,7 @@ class CameraCapture:
                         f"V4L2 direct preferred format {fourcc_name} ({w}x{h}@{fps})"
                     )
                     self.selected_pipeline_mode = "compat"
-                    self.selected_pipeline_source = CAMERA_DEVICE
+                    self.selected_pipeline_source = self.camera_device
                     self.selected_pipeline_backend = None
                     logger.info("Camera opened using %s", self.selected_pipeline)
                     return cap
@@ -428,7 +464,7 @@ class CameraCapture:
 
         try:
             result = subprocess.run(
-                ["v4l2-ctl", "--device", CAMERA_DEVICE, "--list-formats-ext"],
+                ["v4l2-ctl", "--device", self.camera_device, "--list-formats-ext"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 universal_newlines=True,
@@ -584,6 +620,30 @@ class CameraCapture:
 
         return ordered
 
+    def _apply_device_profile_to_pipeline(self, pipeline: str) -> str:
+        """Rebind pipeline string to this camera device and profile dimensions."""
+        if not isinstance(pipeline, str) or not pipeline:
+            return pipeline
+
+        rebased = pipeline.replace(f"device={CAMERA_DEVICE}", f"device={self.camera_device}")
+
+        rebased = re.sub(
+            r"width=\d+",
+            f"width={self.capture_width}",
+            rebased,
+        )
+        rebased = re.sub(
+            r"height=\d+",
+            f"height={self.capture_height}",
+            rebased,
+        )
+        rebased = re.sub(
+            r"framerate=\d+/1",
+            f"framerate={self.capture_fps}/1",
+            rebased,
+        )
+        return rebased
+
     def _initialize_camera(self):
         """Initialize camera capture"""
         try:
@@ -600,7 +660,11 @@ class CameraCapture:
             self.startup_probe_order = []
 
             fallback_sources = [
-                (GST_PIPELINE, cv2.CAP_GSTREAMER, "configured GStreamer pipeline"),
+                (
+                    self._apply_device_profile_to_pipeline(GST_PIPELINE),
+                    cv2.CAP_GSTREAMER,
+                    "configured GStreamer pipeline",
+                ),
             ]
 
             if CAMERA_SOURCE == "usb" and not GST_PIPELINE_IS_OVERRIDE:
@@ -683,7 +747,7 @@ class CameraCapture:
                 for candidate in usb_candidates:
                     fallback_sources.append(
                         (
-                            candidate["source"],
+                            self._apply_device_profile_to_pipeline(candidate["source"]),
                             candidate["backend"],
                             candidate["label"],
                         )
@@ -692,7 +756,7 @@ class CameraCapture:
                 # Last-resort USB fallback: direct V4L2 capture (no GStreamer pipeline string).
                 fallback_sources.append(
                     (
-                        CAMERA_DEVICE,
+                        self.camera_device,
                         None,
                         "V4L2 device (direct)",
                     )
@@ -701,7 +765,7 @@ class CameraCapture:
                 # Additional fallback for hosts where the active camera is not /dev/video0.
                 discovered_devices = self._discover_v4l2_devices()
                 for device_path in discovered_devices:
-                    if device_path == CAMERA_DEVICE:
+                    if device_path == self.camera_device:
                         continue
                     fallback_sources.append(
                         (
@@ -765,6 +829,10 @@ class CameraCapture:
                 cap = cv2.VideoCapture(source, backend)
 
             if cap is not None and cap.isOpened():
+                try:
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
                 logger.info("Camera opened using %s", label)
                 return cap
 
@@ -806,6 +874,12 @@ class CameraCapture:
                 return True, self._last_frame.copy()
 
             try:
+                if self.buffer_flush_grabs > 0:
+                    for _ in range(self.buffer_flush_grabs):
+                        ok = self.cap.grab()
+                        if not ok:
+                            break
+
                 ret, frame = self.cap.read()
 
                 if not ret or frame is None:
@@ -1034,6 +1108,13 @@ class CameraCapture:
             source_preview = source_preview[:220] + "..."
 
         return {
+            "camera_id": self.camera_id,
+            "camera_device": self.camera_device,
+            "capture_profile": {
+                "width": self.capture_width,
+                "height": self.capture_height,
+                "fps": self.capture_fps,
+            },
             "selected_pipeline": self.selected_pipeline,
             "selected_pipeline_mode": self.selected_pipeline_mode,
             "selected_pipeline_backend": self.selected_pipeline_backend,
@@ -1065,16 +1146,168 @@ class CameraCapture:
         self.release()
 
 
-# Global camera instance
-camera = None
+# Global camera instances
+cameras = {}
 
 
-def get_camera() -> CameraCapture:
-    """Get or create camera instance"""
-    global camera
-    if camera is None:
-        camera = CameraCapture()
-    return camera
+def get_camera_profile(camera_id: str) -> dict:
+    camera_key = (camera_id or CAMERA_DEFAULT_ID or "cam1").lower()
+    if camera_key in CAMERA_PROFILES:
+        profile = dict(CAMERA_PROFILES[camera_key])
+        if camera_key == "cam2":
+            profile["device"] = _resolve_camera2_device_from_hint(str(profile.get("device") or CAMERA_DEVICE))
+        return profile
+    return CAMERA_PROFILES.get("cam1", {"device": CAMERA_DEVICE, "width": CAMERA_WIDTH, "height": CAMERA_HEIGHT, "fps": CAMERA_FPS})
+
+
+def get_camera(camera_id: str = None) -> CameraCapture:
+    """Get or create a camera instance by logical camera id."""
+    global cameras
+    camera_key = (camera_id or CAMERA_DEFAULT_ID or "cam1").lower()
+    if camera_key not in cameras or cameras[camera_key] is None:
+        cameras[camera_key] = CameraCapture(camera_id=camera_key, profile=get_camera_profile(camera_key))
+    return cameras[camera_key]
+
+
+def get_camera_ids() -> list:
+    """Return configured logical camera ids."""
+    return sorted(CAMERA_PROFILES.keys())
+
+
+def release_camera(camera_id: str):
+    """Release and remove a camera instance from registry."""
+    global cameras
+    camera_key = (camera_id or CAMERA_DEFAULT_ID or "cam1").lower()
+    cam = cameras.get(camera_key)
+    if cam is not None:
+        cam.release()
+    cameras[camera_key] = None
+
+
+def release_all_cameras():
+    """Release all instantiated cameras."""
+    global cameras
+    for camera_id in list(cameras.keys()):
+        try:
+            cam = cameras.get(camera_id)
+            if cam is not None:
+                cam.release()
+        except Exception:
+            pass
+        cameras[camera_id] = None
+
+
+def probe_camera_devices_gstreamer() -> dict:
+    """Probe /dev/video* nodes and include GStreamer-visible capabilities."""
+    devices = sorted(glob.glob("/dev/video*"))
+    profiles = {
+        camera_id: {
+            "device": profile.get("device"),
+            "width": int(profile.get("width") or CAMERA_WIDTH),
+            "height": int(profile.get("height") or CAMERA_HEIGHT),
+            "fps": int(profile.get("fps") or CAMERA_FPS),
+        }
+        for camera_id, profile in CAMERA_PROFILES.items()
+    }
+
+    gst_monitor_output = ""
+    gst_available = False
+
+    try:
+        gst_check = subprocess.run(
+            ["gst-inspect-1.0", "v4l2src"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=2,
+            check=False,
+        )
+        gst_available = gst_check.returncode == 0
+    except Exception:
+        gst_available = False
+
+    if gst_available:
+        try:
+            monitor = subprocess.run(
+                ["gst-device-monitor-1.0", "Video/Source"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=3,
+                check=False,
+            )
+            if monitor.returncode == 0:
+                gst_monitor_output = (monitor.stdout or "")
+        except Exception:
+            gst_monitor_output = ""
+
+    per_device_formats = {}
+    for dev in devices:
+        per_device_formats[dev] = {"gstreamer_caps": [], "v4l2_modes": {"mjpeg": [], "yuy2": []}}
+
+        if gst_monitor_output:
+            try:
+                for line in gst_monitor_output.splitlines():
+                    if dev in line:
+                        per_device_formats[dev]["gstreamer_caps"].append(line.strip())
+            except Exception:
+                pass
+
+        try:
+            ctl = subprocess.run(
+                ["v4l2-ctl", "--device", dev, "--list-formats-ext"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=3,
+                check=False,
+            )
+            if ctl.returncode == 0:
+                current_format = None
+                current_size = None
+                for raw_line in (ctl.stdout or "").splitlines():
+                    line = raw_line.strip()
+                    lower = line.lower()
+                    if "pixel format" in lower:
+                        if "mjpg" in lower or "mjpeg" in lower:
+                            current_format = "mjpeg"
+                        elif "yuyv" in lower or "yuy2" in lower:
+                            current_format = "yuy2"
+                        else:
+                            current_format = None
+                        current_size = None
+                        continue
+
+                    size_match = re.search(r"Size:\s*Discrete\s*(\d+)x(\d+)", line)
+                    if size_match:
+                        current_size = (int(size_match.group(1)), int(size_match.group(2)))
+                        continue
+
+                    fps_match = re.search(r"\((\d+(?:\.\d+)?)\s*fps\)", line)
+                    if fps_match and current_format and current_size:
+                        fps = int(float(fps_match.group(1)))
+                        per_device_formats[dev]["v4l2_modes"][current_format].append(
+                            [current_size[0], current_size[1], fps]
+                        )
+        except Exception:
+            pass
+
+    mapping = {}
+    for cam_id, profile in profiles.items():
+        mapped_device = profile.get("device")
+        mapping[cam_id] = {
+            "configured_device": mapped_device,
+            "present": mapped_device in devices,
+            "formats": per_device_formats.get(mapped_device, {}),
+        }
+
+    return {
+        "configured_profiles": profiles,
+        "discovered_video_devices": devices,
+        "gstreamer_available": gst_available,
+        "camera_mapping": mapping,
+        "all_device_formats": per_device_formats,
+    }
 
 
 def check_cuda_availability() -> dict:

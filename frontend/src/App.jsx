@@ -56,8 +56,26 @@ function App() {
         <div className="dashboard-grid">
           {/* Video Stream Section */}
           <section className="dashboard-section camera-panel">
-            <h2>Live Camera Feed</h2>
-            <VideoStream />
+            <h2>Live Camera Feeds</h2>
+            <div className="camera-grid">
+              <div className="camera-tile">
+                <h3>Camera 1 (Main)</h3>
+                <VideoStream
+                  cameraId="cam1"
+                  startLabel="Start Cam 1"
+                  stopLabel="Stop Cam 1"
+                />
+              </div>
+              <div className="camera-tile">
+                <h3>Camera 2 (IR)</h3>
+                <VideoStream
+                  cameraId="cam2"
+                  startLabel="Start Cam 2"
+                  stopLabel="Stop Cam 2"
+                  forceMjpeg
+                />
+              </div>
+            </div>
           </section>
 
           {/* GPIO Controls Section */}

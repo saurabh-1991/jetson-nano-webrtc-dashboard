@@ -16,9 +16,15 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
-from .config import API_DEBUG, LOG_LEVEL, LOG_FORMAT
-from .camera import get_camera, check_cuda_availability
-from . import camera as camera_module
+from .config import API_DEBUG, LOG_LEVEL, LOG_FORMAT, CAMERA_DEFAULT_ID
+from .camera import (
+    get_camera,
+    check_cuda_availability,
+    get_camera_ids,
+    release_camera,
+    release_all_cameras,
+    probe_camera_devices_gstreamer,
+)
 from .gpio_control import get_gpio_controller
 from . import gpio_control as gpio_module
 from .sensor_data import get_sensor_data_service
@@ -111,7 +117,7 @@ def get_software_version_info() -> Dict[str, str]:
 status_broadcast_task = None
 camera_idle_watchdog_task = None
 safety_watchdog_task = None
-active_mjpeg_sessions = set()
+active_mjpeg_sessions = {}
 active_mjpeg_lock = asyncio.Lock()
 CAMERA_IDLE_RELEASE_SECONDS = max(3, int(os.getenv("CAMERA_IDLE_RELEASE_SECONDS", "6")))
 
@@ -127,33 +133,49 @@ safety_reset_count = 0
 next_event_compact_ts = 0.0
 
 
+def _resolve_camera_id(camera_id: str = None) -> str:
+    requested = (camera_id or CAMERA_DEFAULT_ID or "cam1").lower()
+    available = set(get_camera_ids())
+    if requested in available:
+        return requested
+    return "cam1"
+
+
+def _ensure_camera_session_bucket(camera_id: str):
+    if camera_id not in active_mjpeg_sessions:
+        active_mjpeg_sessions[camera_id] = set()
+
+
 async def camera_idle_watchdog():
     """Release camera automatically after inactivity when no viewers remain."""
     while True:
         try:
             await asyncio.sleep(1.0)
 
-            camera = getattr(camera_module, "camera", None)
-            if camera is None:
-                continue
+            camera_ids = get_camera_ids()
+            for camera_id in camera_ids:
+                camera = get_camera(camera_id)
+                if camera is None:
+                    continue
 
-            async with active_mjpeg_lock:
-                current_mjpeg_clients = len(active_mjpeg_sessions)
+                async with active_mjpeg_lock:
+                    _ensure_camera_session_bucket(camera_id)
+                    current_mjpeg_clients = len(active_mjpeg_sessions[camera_id])
 
-            current_webrtc_connections = 0
-            if is_webrtc_available():
-                try:
-                    current_webrtc_connections = get_webrtc_manager_safe().get_connection_count()
-                except Exception:
-                    current_webrtc_connections = 0
+                current_webrtc_connections = 0
+                if is_webrtc_available():
+                    try:
+                        current_webrtc_connections = get_webrtc_manager_safe().get_connection_count()
+                    except Exception:
+                        current_webrtc_connections = 0
 
-            released = camera.maybe_release_if_idle(
-                idle_seconds=CAMERA_IDLE_RELEASE_SECONDS,
-                active_mjpeg_clients=current_mjpeg_clients,
-                webrtc_connections=current_webrtc_connections,
-            )
-            if released:
-                camera_module.camera = None
+                released = camera.maybe_release_if_idle(
+                    idle_seconds=CAMERA_IDLE_RELEASE_SECONDS,
+                    active_mjpeg_clients=current_mjpeg_clients,
+                    webrtc_connections=current_webrtc_connections,
+                )
+                if released:
+                    release_camera(camera_id)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -210,8 +232,7 @@ async def safety_watchdog_loop():
 def cleanup_resources():
     """Cleanup resources on interpreter exit."""
     try:
-        if getattr(camera_module, 'camera', None) is not None:
-            camera_module.camera.release()
+        release_all_cameras()
     except Exception as e:
         logger.warning(f"Camera cleanup failed at exit: {e}")
     try:
@@ -282,8 +303,7 @@ async def on_shutdown():
             pass
 
     # Clean up resources
-    if getattr(camera_module, 'camera', None) is not None:
-        camera_module.camera.release()
+    release_all_cameras()
     if getattr(gpio_module, 'gpio_controller', None) is not None:
         gpio_module.gpio_controller.cleanup()
 
@@ -374,14 +394,17 @@ async def root():
 @app.get("/health")
 async def health():
     """Detailed health check"""
-    camera = getattr(camera_module, "camera", None)
+    cameras_health = {}
+    for camera_id in get_camera_ids():
+        camera = get_camera(camera_id)
+        cameras_health[camera_id] = {
+            "is_open": camera.is_open if camera else False,
+            "frame_count": camera.get_frame_count() if camera else 0,
+        }
 
     return {
         "status": "healthy",
-        "camera": {
-            "is_open": camera.is_open if camera else False,
-            "frame_count": camera.get_frame_count() if camera else 0
-        },
+        "cameras": cameras_health,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -541,12 +564,14 @@ async def sensors_simulation_set(payload: dict):
 # ==================== CAMERA ENDPOINTS ====================
 
 @app.get("/api/camera/info")
-async def camera_info():
+async def camera_info(camera_id: str = CAMERA_DEFAULT_ID):
     """Get camera information"""
-    camera = getattr(camera_module, "camera", None)
+    camera_id = _resolve_camera_id(camera_id)
+    camera = get_camera(camera_id)
     pipeline_info = camera.get_runtime_diagnostics() if camera else {}
 
     return {
+        "camera_id": camera_id,
         "is_open": camera.is_open if camera else False,
         "frame_count": camera.get_frame_count() if camera else 0,
         "cuda_enabled": camera.cuda_enabled if camera else False,
@@ -558,23 +583,35 @@ async def camera_info():
     }
 
 
+@app.get("/api/camera/devices/probe")
+async def camera_devices_probe():
+    """Probe connected camera devices and supported formats (GStreamer + V4L2 view)."""
+    return {
+        **probe_camera_devices_gstreamer(),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
 @app.post("/api/camera/stop")
 async def stop_camera(request: dict = None):
     """Request camera release after local client stop; safe for multi-client use."""
     request = request or {}
+    camera_id = _resolve_camera_id(request.get("camera_id") or CAMERA_DEFAULT_ID)
     stream_session_id = request.get("stream_session_id")
 
     # Explicitly unregister the caller's MJPEG session for immediate stats update.
     if stream_session_id:
         async with active_mjpeg_lock:
-            if stream_session_id in active_mjpeg_sessions:
-                active_mjpeg_sessions.discard(stream_session_id)
+            _ensure_camera_session_bucket(camera_id)
+            if stream_session_id in active_mjpeg_sessions[camera_id]:
+                active_mjpeg_sessions[camera_id].discard(stream_session_id)
 
     # Give stream generators a short moment to observe disconnection and decrement counters.
     await asyncio.sleep(0.35)
 
     async with active_mjpeg_lock:
-        current_mjpeg_clients = len(active_mjpeg_sessions)
+        _ensure_camera_session_bucket(camera_id)
+        current_mjpeg_clients = len(active_mjpeg_sessions[camera_id])
 
     current_webrtc_connections = 0
     if is_webrtc_available():
@@ -583,7 +620,7 @@ async def stop_camera(request: dict = None):
         except Exception:
             current_webrtc_connections = 0
 
-    camera = getattr(camera_module, "camera", None)
+    camera = get_camera(camera_id)
     released = False
     if camera is not None:
         released = camera.maybe_release_if_idle(
@@ -592,14 +629,15 @@ async def stop_camera(request: dict = None):
             webrtc_connections=current_webrtc_connections,
         )
         if released:
-            camera_module.camera = None
+            release_camera(camera_id)
 
     return {
+        "camera_id": camera_id,
         "released": released,
         "stream_session_id": stream_session_id,
         "active_mjpeg_clients": current_mjpeg_clients,
         "webrtc_connections": current_webrtc_connections,
-        "camera_open": bool(getattr(camera_module, "camera", None) and camera_module.camera.is_open),
+        "camera_open": bool(camera and camera.is_open),
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -608,10 +646,12 @@ async def stop_camera(request: dict = None):
 async def recover_camera(request: dict = None):
     """Force camera release and reinitialize for manual operator recovery."""
     request = request or {}
+    camera_id = _resolve_camera_id(request.get("camera_id") or CAMERA_DEFAULT_ID)
     reason = str(request.get("reason") or "manual_operator_recover")
 
     async with active_mjpeg_lock:
-        mjpeg_clients = len(active_mjpeg_sessions)
+        _ensure_camera_session_bucket(camera_id)
+        mjpeg_clients = len(active_mjpeg_sessions[camera_id])
 
     webrtc_connections = 0
     if is_webrtc_available():
@@ -620,7 +660,7 @@ async def recover_camera(request: dict = None):
         except Exception:
             webrtc_connections = 0
 
-    camera = getattr(camera_module, "camera", None)
+    camera = get_camera(camera_id)
     was_open = bool(camera and camera.is_open)
     forced_release = False
 
@@ -630,10 +670,10 @@ async def recover_camera(request: dict = None):
             forced_release = True
         except Exception:
             forced_release = False
-        camera_module.camera = None
+        release_camera(camera_id)
 
     # Create a fresh camera instance.
-    new_camera = get_camera()
+    new_camera = get_camera(camera_id)
     recovered = bool(new_camera and new_camera.is_open)
     diagnostics = new_camera.get_runtime_diagnostics() if new_camera else {}
 
@@ -657,6 +697,7 @@ async def recover_camera(request: dict = None):
     )
 
     return {
+        "camera_id": camera_id,
         "success": recovered,
         "reason": reason,
         "was_open": was_open,
@@ -674,9 +715,10 @@ async def recover_camera(request: dict = None):
 
 
 @app.get("/api/camera/frame")
-async def get_frame():
+async def get_frame(camera_id: str = CAMERA_DEFAULT_ID):
     """Get single frame as JPEG"""
-    camera = get_camera()
+    camera_id = _resolve_camera_id(camera_id)
+    camera = get_camera(camera_id)
     if not camera.is_open:
         raise HTTPException(
             status_code=503,
@@ -696,7 +738,8 @@ async def get_frame():
 @app.get("/api/camera/stream")
 async def stream_mjpeg(request: Request):
     """Stream video as MJPEG (fallback for low-latency needs)"""
-    startup_camera = get_camera()
+    camera_id = _resolve_camera_id(request.query_params.get("camera_id") or CAMERA_DEFAULT_ID)
+    startup_camera = get_camera(camera_id)
     if not startup_camera.is_open:
         raise HTTPException(
             status_code=503,
@@ -705,14 +748,16 @@ async def stream_mjpeg(request: Request):
 
     async def generate():
         stream_session_id = request.query_params.get("sid") or str(uuid.uuid4())
-        camera = get_camera()
+        camera = get_camera(camera_id)
 
         async with active_mjpeg_lock:
-            active_mjpeg_sessions.add(stream_session_id)
+            _ensure_camera_session_bucket(camera_id)
+            active_mjpeg_sessions[camera_id].add(stream_session_id)
             logger.info(
-                "MJPEG client connected sid=%s. Active clients: %s",
+                "MJPEG client connected sid=%s camera=%s. Active clients: %s",
                 stream_session_id,
-                len(active_mjpeg_sessions),
+                camera_id,
+                len(active_mjpeg_sessions[camera_id]),
             )
         
         try:
@@ -743,11 +788,13 @@ async def stream_mjpeg(request: Request):
             logger.error(f"Error in MJPEG stream: {e}")
         finally:
             async with active_mjpeg_lock:
-                active_mjpeg_sessions.discard(stream_session_id)
-                remaining_mjpeg_clients = len(active_mjpeg_sessions)
+                _ensure_camera_session_bucket(camera_id)
+                active_mjpeg_sessions[camera_id].discard(stream_session_id)
+                remaining_mjpeg_clients = len(active_mjpeg_sessions[camera_id])
                 logger.info(
-                    "MJPEG client disconnected sid=%s. Active clients: %s",
+                    "MJPEG client disconnected sid=%s camera=%s. Active clients: %s",
                     stream_session_id,
+                    camera_id,
                     remaining_mjpeg_clients,
                 )
 
@@ -762,10 +809,8 @@ async def stream_mjpeg(request: Request):
                         webrtc_connections = 0
 
                 if remaining_mjpeg_clients == 0 and webrtc_connections == 0:
-                    if getattr(camera_module, "camera", None) is not None:
-                        camera_module.camera.release()
-                        camera_module.camera = None
-                        logger.info("Released camera after last stream client disconnected")
+                    release_camera(camera_id)
+                    logger.info("Released camera %s after last stream client disconnected", camera_id)
             except Exception as e:
                 logger.warning(f"Failed to release camera on stream disconnect: {e}")
 
@@ -972,7 +1017,21 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/api/stats")
 async def get_stats():
     """Get application statistics"""
-    camera = getattr(camera_module, "camera", None)
+    per_camera = {}
+    total_mjpeg = 0
+    for camera_id in get_camera_ids():
+        cam = get_camera(camera_id)
+        async with active_mjpeg_lock:
+            _ensure_camera_session_bucket(camera_id)
+            mjpeg_clients = len(active_mjpeg_sessions[camera_id])
+            total_mjpeg += mjpeg_clients
+        per_camera[camera_id] = {
+            "camera_frames": cam.get_frame_count() if cam else 0,
+            "camera_performance": cam.get_performance_stats() if cam else None,
+            "active_mjpeg_clients": mjpeg_clients,
+        }
+
+    default_camera = get_camera(_resolve_camera_id(CAMERA_DEFAULT_ID))
     webrtc_connections = 0
     if is_webrtc_available():
         try:
@@ -982,11 +1041,12 @@ async def get_stats():
             webrtc_connections = 0
     
     return {
-        "camera_frames": camera.get_frame_count() if camera else 0,
-        "camera_performance": camera.get_performance_stats() if camera else None,
+            "camera_frames": default_camera.get_frame_count() if default_camera else 0,
+            "camera_performance": default_camera.get_performance_stats() if default_camera else None,
         "camera_idle_release_seconds": CAMERA_IDLE_RELEASE_SECONDS,
-        "active_mjpeg_clients": len(active_mjpeg_sessions),
+            "active_mjpeg_clients": total_mjpeg,
         "webrtc_connections": webrtc_connections,
+            "cameras": per_camera,
         "timestamp": datetime.now().isoformat()
     }
 
