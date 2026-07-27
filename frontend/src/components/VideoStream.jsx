@@ -98,6 +98,19 @@ export const VideoStream = ({
     let usedMjpegFallback = false
 
     try {
+      const infoResponse = await fetch(
+        `${baseUrl}/api/camera/info?camera_id=${encodeURIComponent(cameraId)}`,
+        { cache: 'no-store' }
+      )
+
+      if (infoResponse.status === 404) {
+        setError(`Camera ${cameraId} is not enabled in backend configuration.`)
+        setConnectionState('disconnected')
+        setIsConnecting(false)
+        setIsConnected(false)
+        return
+      }
+
       if (forceMjpeg) {
         usedMjpegFallback = true
         startMJPEGFallback(baseUrl, 'Using MJPEG mode for this camera')

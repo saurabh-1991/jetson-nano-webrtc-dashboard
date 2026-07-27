@@ -514,9 +514,15 @@ async def get_recent_events():
 async def system_info():
     """Get system information"""
     cuda_info = check_cuda_availability()
+    enabled_camera_ids = get_camera_ids()
     return {
         "device": "Jetson Nano",
         "cuda": cuda_info,
+        "camera": {
+            "enabled_camera_ids": enabled_camera_ids,
+            "default_camera_id": _resolve_camera_id(CAMERA_DEFAULT_ID),
+            "strict_camera_ids": bool(CAMERA_STRICT_CAMERA_IDS),
+        },
         "software": get_software_version_info(),
         "timestamp": datetime.now().isoformat()
     }
@@ -613,6 +619,18 @@ async def camera_devices_probe():
     """Probe connected camera devices and supported formats (GStreamer + V4L2 view)."""
     return {
         **probe_camera_devices_gstreamer(),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/camera/enabled")
+async def camera_enabled():
+    """Return enabled logical camera IDs and strict camera routing policy."""
+    enabled_camera_ids = get_camera_ids()
+    return {
+        "enabled_camera_ids": enabled_camera_ids,
+        "default_camera_id": _resolve_camera_id(CAMERA_DEFAULT_ID),
+        "strict_camera_ids": bool(CAMERA_STRICT_CAMERA_IDS),
         "timestamp": datetime.now().isoformat(),
     }
 

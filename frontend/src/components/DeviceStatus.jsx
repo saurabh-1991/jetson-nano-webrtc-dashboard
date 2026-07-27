@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { cameraAPI, systemAPI } from '../services/api'
 import './DeviceStatus.css'
 
 export const DeviceStatus = () => {
   const [status, setStatus] = useState(null)
-  const [cameras, setCameras] = useState({ cam1: null, cam2: null })
+  const [cameraIds, setCameraIds] = useState(['cam1'])
+  const cameraIdsRef = useRef(['cam1'])
+  const [cameras, setCameras] = useState({ cam1: null })
   const [cameraLastUpdatedAt, setCameraLastUpdatedAt] = useState(0)
   const [loading, setLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -18,6 +20,11 @@ export const DeviceStatus = () => {
       setIsRefreshing(true)
       const response = await systemAPI.getStatus()
       setStatus(response.data)
+      const ids = Object.keys(response?.data?.cameras || {})
+      if (ids.length > 0) {
+        cameraIdsRef.current = ids
+        setCameraIds(ids)
+      }
       setError(null)
     } catch (err) {
       console.error('Failed to fetch device status:', err)
@@ -30,17 +37,26 @@ export const DeviceStatus = () => {
 
   const fetchCameras = async () => {
     try {
-      const [cam1Response, cam2Response] = await Promise.allSettled([
-        cameraAPI.getInfo('cam1', { timeout: 1800 }),
-        cameraAPI.getInfo('cam2', { timeout: 1800 }),
-      ])
+      const ids = cameraIdsRef.current && cameraIdsRef.current.length > 0
+        ? cameraIdsRef.current
+        : ['cam1']
 
-      setCameras((prev) => ({
-        cam1: cam1Response.status === 'fulfilled' ? (cam1Response.value?.data || null) : prev.cam1,
-        cam2: cam2Response.status === 'fulfilled' ? (cam2Response.value?.data || null) : prev.cam2,
-      }))
+      const responses = await Promise.allSettled(
+        ids.map((id) => cameraAPI.getInfo(id, { timeout: 1800 }))
+      )
 
-      if (cam1Response.status === 'fulfilled' || cam2Response.status === 'fulfilled') {
+      setCameras((prev) => {
+        const next = { ...prev }
+        responses.forEach((result, index) => {
+          const id = ids[index]
+          if (result.status === 'fulfilled') {
+            next[id] = result.value?.data || null
+          }
+        })
+        return next
+      })
+
+      if (responses.some((result) => result.status === 'fulfilled')) {
         setCameraLastUpdatedAt(Date.now())
       }
     } catch (_err) {
@@ -136,10 +152,13 @@ export const DeviceStatus = () => {
     return <div className="device-status-container error">{error}</div>
   }
 
-  const cameraEntries = [
-    { id: 'cam1', label: 'Camera 1 (Main)' },
-    { id: 'cam2', label: 'Camera 2 (IR)' },
-  ]
+  const getCameraLabel = (id) => {
+    if (id === 'cam1') return 'Camera 1 (Main)'
+    if (id === 'cam2') return 'Camera 2 (IR)'
+    return `Camera ${id}`
+  }
+
+  const cameraEntries = cameraIds.map((id) => ({ id, label: getCameraLabel(id) }))
 
   const cameraStatusFresh = cameraLastUpdatedAt > 0 && (Date.now() - cameraLastUpdatedAt) <= 3500
 
