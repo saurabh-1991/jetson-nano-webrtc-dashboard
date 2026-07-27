@@ -177,6 +177,28 @@ Validation expected:
 - plugin probe shows `nvjpegdec=OK` and `nvvidconv=OK`
 - `/health` and `/api/camera/enabled` return healthy with both cameras enabled
 
+### Step A.1c — Optional HW-accel trial backend image (safe, non-default)
+
+Use this only when you want to test a different backend base image for potential
+OpenCV GStreamer/CUDA availability, while keeping the regular deployment path untouched.
+
+This script builds `backend/Dockerfile.jetpack46.hwtrial` and runs backend with
+`--runtime nvidia` as a drop-in replacement.
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+chmod +x scripts/run_backend_with_nvidia_runtime_hwtrial.sh
+./scripts/run_backend_with_nvidia_runtime_hwtrial.sh
+```
+
+Validation expected from script output:
+
+- `runtime=nvidia`
+- OpenCV probe should report: `gstreamer_declared_yes True` (desired).
+- OpenCV probe should report: `has_cuda_mod True` and `cuda_devices > 0` (desired).
+- `/api/camera/info` should trend to `hardware_accel.opencv_gstreamer_enabled=true`.
+- `/api/camera/info` should trend to `hardware_accel.hardware_pipeline_eligible=true`.
+
 ### Step A.2 — Cleanup dangling images (when `<none>` images accumulate)
 
 If you previously ran many `--build` cycles, old untagged layers will accumulate. Clean them safely with:
