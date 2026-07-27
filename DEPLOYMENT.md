@@ -55,15 +55,17 @@ cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
 
 Power-run automation (autologin + boot autostart + static IP scripts) is maintained on branch:
 
-- `poc_demo_v1.1.0`
+- `poc_demo_v1.3.0` (validated code/runtime baseline)
+
+Use `poc_demo_v1.4.0` after pulling documentation updates when starting the next development phase (video storing + experiment workflow).
 
 Pull that branch on Jetson:
 
 ```bash
 cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
 git fetch origin
-git checkout -B poc_demo_v1.1.0 origin/poc_demo_v1.1.0
-git reset --hard origin/poc_demo_v1.1.0
+git checkout -B poc_demo_v1.3.0 origin/poc_demo_v1.3.0
+git reset --hard origin/poc_demo_v1.3.0
 ```
 
 ---
@@ -177,27 +179,13 @@ Validation expected:
 - plugin probe shows `nvjpegdec=OK` and `nvvidconv=OK`
 - `/health` and `/api/camera/enabled` return healthy with both cameras enabled
 
-### Step A.1c — Optional HW-accel trial backend image (safe, non-default)
+### Step A.1c — Canonical accelerated backend note
 
-Use this only when you want to test a different backend base image for potential
-OpenCV GStreamer/CUDA availability, while keeping the regular deployment path untouched.
+Acceleration R&D is now consolidated into the default JetPack backend path:
 
-This script builds `backend/Dockerfile.jetpack46.hwtrial` and runs backend with
-`--runtime nvidia` as a drop-in replacement.
-
-```bash
-cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
-chmod +x scripts/run_backend_with_nvidia_runtime_hwtrial.sh
-./scripts/run_backend_with_nvidia_runtime_hwtrial.sh
-```
-
-Validation expected from script output:
-
-- `runtime=nvidia`
-- OpenCV probe should report: `gstreamer_declared_yes True` (desired).
-- OpenCV probe should report: `has_cuda_mod True` and `cuda_devices > 0` (desired).
-- `/api/camera/info` should trend to `hardware_accel.opencv_gstreamer_enabled=true`.
-- `/api/camera/info` should trend to `hardware_accel.hardware_pipeline_eligible=true`.
+- `backend/Dockerfile.jetpack46` is the single canonical backend Dockerfile for JP4.6.
+- `scripts/run_backend_with_nvidia_runtime.sh` is the single canonical runtime-nvidia helper.
+- The helper now includes OpenCV capability probe and camera diagnostics output by default.
 
 ### Step A.2 — Cleanup dangling images (when `<none>` images accumulate)
 
@@ -234,7 +222,14 @@ docker-compose stop docker-prune
 
 ### Step A0 — One-command plug-and-play setup (autologin + boot start + static IP)
 
-This applies the power-run automation scripts introduced in `poc_demo_v1.1.0`.
+This applies the power-run automation scripts from the validated runtime baseline (`poc_demo_v1.3.0`).
+
+Boot behavior (important for field use without internet):
+
+- Boot service starts stack in **no-build mode** by default (`COMPOSE_REBUILD_ON_BOOT=false`).
+- Backend is auto-launched with `--runtime nvidia` on every reboot.
+- This allows power-off/power-on in a different LAN even when internet is unavailable.
+- If you intentionally want rebuild-at-boot, set `COMPOSE_REBUILD_ON_BOOT=true`.
 
 Before running, edit `scripts/powerrun.config` with your custom network values
 (`ETH_IP`, `ETH_GATEWAY`, `ETH_DNS`, optional Wi-Fi values, and mDNS hostname keys).
@@ -280,6 +275,7 @@ After setup, reboot once and use fixed URL:
 | `ROOT_PASSWORD` | Root password (required when enabling root account) | `ChangeMeNow!` |
 | `START_ON_BOOT` | Enable systemd service at boot | `true` |
 | `START_NOW` | Start service immediately during setup | `true` |
+| `COMPOSE_REBUILD_ON_BOOT` | Rebuild images on boot (`false` recommended for offline LAN) | `false` |
 | `ENABLE_MDNS` | Enable Avahi/mDNS LAN discovery | `true` |
 | `MDNS_HOSTNAME` | Hostname exposed as `http://<name>.local/` | `jetson-dashboard` |
 | `ETH_DEVICE` | Ethernet interface | `eth0` |

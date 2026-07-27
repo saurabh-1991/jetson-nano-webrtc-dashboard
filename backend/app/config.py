@@ -14,6 +14,15 @@ def _parse_optional_camera_accel(var_name: str) -> str:
     raw = str(os.getenv(var_name, "")).strip().lower()
     return raw if raw in ("", "auto", "hardware", "compat", "direct") else ""
 
+
+def _parse_optional_v4l2_io_mode(var_name: str):
+    raw = str(os.getenv(var_name, "")).strip()
+    if raw == "":
+        return None
+    if raw.isdigit() and int(raw) in (0, 1, 2, 3, 4, 5):
+        return int(raw)
+    return None
+
 # Camera Configuration
 CAMERA_DEVICE = "/dev/video0"
 CAMERA_WIDTH = 1280
@@ -82,6 +91,25 @@ CAMERA_USB_STARTUP_PROBE = os.getenv("CAMERA_USB_STARTUP_PROBE", "true").lower()
 )
 CAMERA1_USB_STARTUP_PROBE = _parse_optional_bool_env("CAMERA1_USB_STARTUP_PROBE")
 CAMERA2_USB_STARTUP_PROBE = _parse_optional_bool_env("CAMERA2_USB_STARTUP_PROBE")
+CAMERA_USB_PREFLIGHT_VALIDATE = os.getenv("CAMERA_USB_PREFLIGHT_VALIDATE", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+CAMERA1_USB_PREFLIGHT_VALIDATE = _parse_optional_bool_env("CAMERA1_USB_PREFLIGHT_VALIDATE")
+CAMERA2_USB_PREFLIGHT_VALIDATE = _parse_optional_bool_env("CAMERA2_USB_PREFLIGHT_VALIDATE")
+CAMERA_USB_HW_MODE_LOCK = os.getenv("CAMERA_USB_HW_MODE_LOCK", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+CAMERA1_USB_HW_MODE_LOCK = _parse_optional_bool_env("CAMERA1_USB_HW_MODE_LOCK")
+CAMERA2_USB_HW_MODE_LOCK = _parse_optional_bool_env("CAMERA2_USB_HW_MODE_LOCK")
+CAMERA_USB_V4L2_IO_MODE = _parse_optional_v4l2_io_mode("CAMERA_USB_V4L2_IO_MODE")
+CAMERA1_USB_V4L2_IO_MODE = _parse_optional_v4l2_io_mode("CAMERA1_USB_V4L2_IO_MODE")
+CAMERA2_USB_V4L2_IO_MODE = _parse_optional_v4l2_io_mode("CAMERA2_USB_V4L2_IO_MODE")
 
 try:
     CAMERA_CSI_SENSOR_ID = int(os.getenv("CAMERA_CSI_SENSOR_ID", "0"))
@@ -120,7 +148,13 @@ if not _enabled_ids:
 
 CAMERA_PROFILES = {camera_id: _all_camera_profiles[camera_id] for camera_id in _enabled_ids}
 
-CAMERA_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA_BUFFER_FLUSH_GRABS", "5")))
+CAMERA_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA_BUFFER_FLUSH_GRABS", "1")))
+CAMERA_DIRECT_V4L2_TUNE = os.getenv("CAMERA_DIRECT_V4L2_TUNE", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 # IR camera low-light adaptation (best-effort via V4L2 controls)
 CAMERA2_ADAPTIVE_EXPOSURE = os.getenv("CAMERA2_ADAPTIVE_EXPOSURE", "true").lower() in (

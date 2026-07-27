@@ -97,21 +97,41 @@ For detailed Jetson Nano deployment steps, including both Docker Compose and nat
 
 ## 🧭 Branch and release guidance
 
-- Current production hardening + operator controls branch: `poc_demo_v1.2.0`
-- Stable deployment branch for latest plug-and-play flow: `poc_demo_v1.1.0`
-- Earlier deployment baseline: `poc_demo_v1.0.0`
+- Current production/validated code branch: `poc_demo_v1.3.0`
+- Documentation baseline + next development starting point: `poc_demo_v1.4.0`
+- Earlier deployment baselines: `poc_demo_v1.2.0`, `poc_demo_v1.1.0`, `poc_demo_v1.0.0`
 
 Recommended branch sync on Jetson:
 
 ```bash
 cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
 git fetch origin
-git checkout -B poc_demo_v1.2.0 origin/poc_demo_v1.2.0
-git reset --hard origin/poc_demo_v1.2.0
+git checkout -B poc_demo_v1.3.0 origin/poc_demo_v1.3.0
+git reset --hard origin/poc_demo_v1.3.0
 ```
 
-## 🆕 What’s included in `poc_demo_v1.2.0`
+## 🆕 What’s included in `poc_demo_v1.4.0`
 
+- Documentation-only release for handoff and planning.
+- Consolidates deployment/docs/readme updates after code validation in `poc_demo_v1.3.0`.
+- Sets the starting point for next development phase:
+  - video storing pipeline implementation
+  - experiment start/stop workflow implementation
+  - UI + API evolution for experiment lifecycle
+
+## 🆕 What’s included in `poc_demo_v1.3.0`
+
+- Dual-camera-first operation retained as the default dashboard behavior (`cam1`, `cam2`)
+- Canonical JP4.6 accelerated backend flow consolidated to:
+  - `backend/Dockerfile.jetpack46`
+  - `scripts/run_backend_with_nvidia_runtime.sh`
+- Frontend reliability updates for stream continuity:
+  - faster MJPEG reconnect attempts
+  - stale stream error clearing after successful resume
+- Backend low-latency tuning updates for smoother motion handling:
+  - direct V4L2 tuning path and reduced frame flush defaults
+- Deployment hygiene improvements:
+  - duplicate hardware-trial files removed to avoid operator confusion
 - Camera reliability + fail-safe hardening:
   - automatic alternate `/dev/video*` fallback when default device cannot open
   - consecutive frame-read failure detection with controlled camera cycle
@@ -493,6 +513,7 @@ For production:
 - [Backend README](backend/README.md) - Backend details
 - [Frontend README](frontend/README.md) - Frontend details
 - [Architecture Doc](Doc/jetson_nano_realtime_web_dashboard_architecture.md) - Full architecture
+- [Scalable Experiment Recording Architecture v1.4.0](Doc/scalable-experiment-recording-architecture-v1.4.0.md) - Dual-camera recording + logging/compression architecture and rollout plan
 - [New Local Network Deployment](Doc/new-local-network-deployment.md) - Beginner deployment in a new LAN
 - [UAT Checklist v1.1.0](Doc/UAT-checklist-v1.1.0.md) - Final acceptance test checklist
 - [Operator Quick Card v1.2.0](Doc/operator-quick-card-v1.2.0.md) - Field-ready quick commands (with manual camera recovery)
@@ -534,6 +555,6 @@ This project is provided as-is for educational and commercial use.
 
 ---
 
-**Version**: 1.2.0  
-**Last Updated**: 2026-07-24  
+**Version**: 1.4.0  
+**Last Updated**: 2026-07-27  
 **Status**: Production Ready ✅

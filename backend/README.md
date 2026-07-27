@@ -36,12 +36,14 @@ React Frontend Dashboard
 
 ## Features
 
-- **Real-time Video Streaming** via WebRTC (optional on JP4.6 profile)
-- **MJPEG fallback stream** for browser compatibility or lower complexity
-- **GPIO control** for LED on/off/toggle via REST
-- **System status APIs** for camera, CUDA, GPIO, and WebSocket status
-- **WebSocket support** for real-time updates and command events
-- **CUDA-aware processing** with GPU acceleration if available
+- **Dual logical camera support** (`cam1`, `cam2`) with per-camera profiles
+- **Real-time video streaming** via WebRTC (optional on JP4.6 profile)
+- **MJPEG fallback stream** with per-camera session tracking
+- **Camera resilience and recovery** (auto fallback, fail-safe counters, manual recover endpoint)
+- **GPIO control** via legacy endpoints and named-output endpoints
+- **System status APIs** for camera/CUDA/GPIO/WebSocket/sensor visibility
+- **Rolling diagnostics + safety watchdog hooks** for backend and frontend events
+- **CUDA-aware processing** with GPU acceleration when available
 - **Hardware integration** through GStreamer and OpenCV
 
 ## Backend Folder Structure
@@ -154,20 +156,32 @@ docker run --privileged -p 8000:8000 jetson-nano-backend
 
 - `GET /api/system/info` — device info and CUDA availability
 - `GET /api/system/status` — full system status payload
-- `GET /api/stats` — backend stats including frame count and WebRTC connection count
+- `GET /api/stats` — backend stats including per-camera counters and active clients
+- `GET /api/sensors/latest` — latest sensor snapshot
+- `GET /api/sensors/history` — recent sensor history window
+- `GET /api/sensors/simulation` / `POST /api/sensors/simulation` — simulation mode control
+- `POST /api/safety/heartbeat` — frontend heartbeat for safety monitoring
+- `POST /api/events/frontend` / `GET /api/events/recent` — rolling diagnostics ingestion/retrieval
 
 ### Camera
 
-- `GET /api/camera/info` — camera open state, frame count, CUDA status, selected pipeline, and startup probe diagnostics
-- `GET /api/camera/frame` — single JPEG frame response
-- `GET /api/camera/stream` — MJPEG live stream fallback
+- `GET /api/camera/enabled` — enabled logical camera IDs and routing policy
+- `GET /api/camera/devices/probe` — `/dev/video*` + format probe diagnostics
+- `GET /api/camera/info?camera_id=cam1|cam2` — camera state/runtime diagnostics
+- `GET /api/camera/frame?camera_id=cam1|cam2` — single JPEG frame response
+- `GET /api/camera/stream?camera_id=cam1|cam2&sid=<session>` — MJPEG stream
+- `POST /api/camera/stop` — optional per-session stop/release request
+- `POST /api/camera/recover` — manual force recover/reinitialize
 
 ### GPIO
 
-- `GET /api/gpio/status` — current LED and GPIO availability
-- `POST /api/gpio/on` — turn LED on
-- `POST /api/gpio/off` — turn LED off
-- `POST /api/gpio/toggle` — toggle LED state
+- `GET /api/gpio/status` — current GPIO state
+- `GET /api/gpio/outputs` — all configured output states
+- `POST /api/gpio/outputs/{output_name}/on|off|toggle` — named output control
+- Legacy compatibility endpoints:
+  - `POST /api/gpio/on`
+  - `POST /api/gpio/off`
+  - `POST /api/gpio/toggle`
 
 ### WebRTC
 

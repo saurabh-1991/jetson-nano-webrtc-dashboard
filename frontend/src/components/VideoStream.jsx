@@ -362,6 +362,7 @@ export const VideoStream = ({
   const onMjpegLoaded = () => {
     clearMjpegRetryTimer()
     mjpegRetryCountRef.current = 0
+    setError(null)
     setIsConnected(true)
     setIsConnecting(false)
     setConnectionState('connected')
@@ -376,7 +377,7 @@ export const VideoStream = ({
     setIsConnecting(true)
     setConnectionState('connecting')
 
-    const retryDelayMs = Math.min(1500 * nextAttempt, 6000)
+    const retryDelayMs = Math.min(350 * nextAttempt, 1800)
     setError(`MJPEG stream load failed, retrying (${nextAttempt})...`)
 
     clearMjpegRetryTimer()

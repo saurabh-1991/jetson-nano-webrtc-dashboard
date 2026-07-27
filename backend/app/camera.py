@@ -2,6 +2,7 @@
 
 import logging
 import re
+import shlex
 import subprocess
 import time
 import threading
@@ -13,12 +14,19 @@ from .config import (
     CAMERA_ACCELERATION,
     CAMERA1_ACCELERATION,
     CAMERA1_AUTO_BRIGHTNESS,
+    CAMERA1_USB_HW_MODE_LOCK,
+    CAMERA1_USB_PREFLIGHT_VALIDATE,
+    CAMERA1_USB_V4L2_IO_MODE,
     CAMERA1_USB_STARTUP_PROBE,
     CAMERA2_ACCELERATION,
     CAMERA2_ADAPTIVE_EXPOSURE,
+    CAMERA2_USB_HW_MODE_LOCK,
+    CAMERA2_USB_PREFLIGHT_VALIDATE,
+    CAMERA2_USB_V4L2_IO_MODE,
     CAMERA2_USB_STARTUP_PROBE,
     CAMERA_DEVICE,
     CAMERA_DEFAULT_ID,
+    CAMERA_DIRECT_V4L2_TUNE,
     CAMERA_REQUIRE_HARDWARE_ACCEL,
     CAMERA_BUFFER_FLUSH_GRABS,
     CAMERA2_EXPOSURE_ADAPT_INTERVAL_SECONDS,
@@ -36,6 +44,9 @@ from .config import (
     CAMERA2_PREFER_GRAY8,
     CAMERA_PROFILES,
     CAMERA_SOURCE,
+    CAMERA_USB_HW_MODE_LOCK,
+    CAMERA_USB_PREFLIGHT_VALIDATE,
+    CAMERA_USB_V4L2_IO_MODE,
     CAMERA_USB_STARTUP_PROBE,
     CAMERA_WIDTH,
     CUDA_ENABLED,
@@ -147,6 +158,21 @@ class CameraCapture:
             self.startup_probe_enabled = bool(CAMERA1_USB_STARTUP_PROBE)
         if self.camera_id == "cam2" and CAMERA2_USB_STARTUP_PROBE is not None:
             self.startup_probe_enabled = bool(CAMERA2_USB_STARTUP_PROBE)
+        self.usb_preflight_validate = CAMERA_USB_PREFLIGHT_VALIDATE
+        if self.camera_id == "cam1" and CAMERA1_USB_PREFLIGHT_VALIDATE is not None:
+            self.usb_preflight_validate = bool(CAMERA1_USB_PREFLIGHT_VALIDATE)
+        if self.camera_id == "cam2" and CAMERA2_USB_PREFLIGHT_VALIDATE is not None:
+            self.usb_preflight_validate = bool(CAMERA2_USB_PREFLIGHT_VALIDATE)
+        self.usb_hw_mode_lock = CAMERA_USB_HW_MODE_LOCK
+        if self.camera_id == "cam1" and CAMERA1_USB_HW_MODE_LOCK is not None:
+            self.usb_hw_mode_lock = bool(CAMERA1_USB_HW_MODE_LOCK)
+        if self.camera_id == "cam2" and CAMERA2_USB_HW_MODE_LOCK is not None:
+            self.usb_hw_mode_lock = bool(CAMERA2_USB_HW_MODE_LOCK)
+        self.usb_v4l2_io_mode = CAMERA_USB_V4L2_IO_MODE
+        if self.camera_id == "cam1" and CAMERA1_USB_V4L2_IO_MODE is not None:
+            self.usb_v4l2_io_mode = CAMERA1_USB_V4L2_IO_MODE
+        if self.camera_id == "cam2" and CAMERA2_USB_V4L2_IO_MODE is not None:
+            self.usb_v4l2_io_mode = CAMERA2_USB_V4L2_IO_MODE
         camera_accel_override = CAMERA1_ACCELERATION if self.camera_id == "cam1" else CAMERA2_ACCELERATION
         self.camera_acceleration_mode = str(camera_accel_override or CAMERA_ACCELERATION or "auto").lower()
         if self.camera_acceleration_mode not in ("auto", "hardware", "compat", "direct"):
@@ -154,6 +180,7 @@ class CameraCapture:
         self.startup_probe_formats = {}
         self.startup_probe_scores = {}
         self.startup_probe_order = []
+        self.preflight_results = {}
         self.last_camera_error = None
         self.detected_usb_modes = {}
         self._frame_lock = threading.Lock()
@@ -465,10 +492,27 @@ class CameraCapture:
 
     def _build_usb_pipeline_mjpeg_hw(self, width: int, height: int, fps: int) -> str:
         """Build an NVIDIA hardware MJPEG pipeline bound to this camera profile."""
+        io_mode_clause = f"io-mode={int(self.usb_v4l2_io_mode)} " if self.usb_v4l2_io_mode is not None else ""
         return (
-            f"v4l2src io-mode=2 do-timestamp=true device={self.camera_device} ! "
+            f"v4l2src {io_mode_clause}do-timestamp=true device={self.camera_device} ! "
             f"image/jpeg,width={width},height={height},framerate={fps}/1 ! "
             "jpegparse ! "
+            "nvjpegdec ! "
+            "nvvidconv ! "
+            "video/x-raw, format=BGRx ! "
+            "videoconvert ! "
+            "video/x-raw, format=BGR ! "
+            "appsink drop=1 max-buffers=1 sync=false"
+        )
+
+    def _build_usb_pipeline_mjpeg_hw_stable(self, width: int, height: int, fps: int) -> str:
+        """Build a stricter MJPEG HW path with explicit parser/queue to reduce startup jitter."""
+        io_mode_clause = f"io-mode={int(self.usb_v4l2_io_mode)} " if self.usb_v4l2_io_mode is not None else ""
+        return (
+            f"v4l2src {io_mode_clause}do-timestamp=true device={self.camera_device} ! "
+            f"image/jpeg,width={width},height={height},framerate={fps}/1 ! "
+            "jpegparse ! "
+            "queue leaky=downstream max-size-buffers=2 ! "
             "nvjpegdec ! "
             "nvvidconv ! "
             "video/x-raw, format=BGRx ! "
@@ -595,6 +639,28 @@ class CameraCapture:
 
         return candidates
 
+    def _build_locked_mjpeg_mode_candidate(self):
+        """Build a profile-locked MJPEG mode candidate from probed camera capabilities."""
+        if not self.detected_usb_modes:
+            self.detected_usb_modes = self._detect_usb_modes()
+
+        mjpeg_mode = self._pick_best_mode(
+            self.detected_usb_modes.get("mjpeg", []),
+            int(self.capture_width),
+            int(self.capture_height),
+            int(self.capture_fps),
+        )
+        if not mjpeg_mode:
+            return None
+
+        mw, mh, mfps = mjpeg_mode
+        return {
+            "source": self._build_usb_pipeline_mjpeg_hw_stable(mw, mh, mfps),
+            "backend": cv2.CAP_GSTREAMER,
+            "label": f"USB hardware pipeline mode-locked ({mw}x{mh}@{mfps})",
+            "format_key": "mjpeg",
+        }
+
     def _open_v4l2_with_preferred_format(self):
         """Try direct OpenCV V4L2 with camera-advertised preferred formats."""
         # Ensure we have parsed modes; this is inexpensive and cached in diagnostics.
@@ -661,6 +727,55 @@ class CameraCapture:
             cap.release()
 
         return None
+
+    def _tune_direct_v4l2_capture(self, cap) -> None:
+        """Apply low-latency capture settings to direct V4L2 handles."""
+        if not CAMERA_DIRECT_V4L2_TUNE or cap is None:
+            return
+
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+
+        target_mode = None
+        try:
+            if not self.detected_usb_modes:
+                self.detected_usb_modes = self._detect_usb_modes()
+            target_mode = self._pick_best_mode(
+                self.detected_usb_modes.get("mjpeg", []),
+                int(self.capture_width),
+                int(self.capture_height),
+                int(self.capture_fps),
+            )
+        except Exception:
+            target_mode = None
+
+        w = int(target_mode[0]) if target_mode else int(self.capture_width)
+        h = int(target_mode[1]) if target_mode else int(self.capture_height)
+        fps = int(target_mode[2]) if target_mode else int(self.capture_fps)
+
+        # Prefer MJPEG over USB to reduce bus load and improve frame freshness.
+        try:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        except Exception:
+            pass
+
+        try:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+            cap.set(cv2.CAP_PROP_FPS, max(1, fps))
+        except Exception:
+            pass
+
+        logger.info(
+            "Applied direct V4L2 tuning for %s: %sx%s@%s (camera=%s)",
+            self.camera_device,
+            w,
+            h,
+            fps,
+            self.camera_id,
+        )
 
     def _infer_pipeline_mode(self, label: str) -> str:
         """Infer pipeline mode from descriptive label."""
@@ -911,6 +1026,75 @@ class CameraCapture:
 
         return ordered
 
+    def _build_gst_preflight_pipeline(self, pipeline: str, num_buffers: int = 20) -> str:
+        """Convert an appsink pipeline to a short-lived gst-launch preflight pipeline."""
+        probe_pipeline = str(pipeline or "")
+        if not probe_pipeline:
+            return probe_pipeline
+
+        # Ensure the capture source is finite to avoid hangs.
+        if "v4l2src" in probe_pipeline and "num-buffers=" not in probe_pipeline:
+            probe_pipeline = probe_pipeline.replace("v4l2src ", f"v4l2src num-buffers={int(num_buffers)} ", 1)
+
+        # Replace terminal appsink branch with fakesink for deterministic probe.
+        probe_pipeline = re.sub(r"appsink\b.*$", "fakesink sync=false", probe_pipeline)
+        return probe_pipeline
+
+    def _gst_preflight_check(self, pipeline: str, label: str, timeout_seconds: float = 7.0) -> bool:
+        """Run a lightweight gst-launch probe and return True when pipeline is viable."""
+        try:
+            launch_check = subprocess.run(
+                ["gst-launch-1.0", "--version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=1.5,
+                check=False,
+            )
+            has_gst_launch = launch_check.returncode == 0
+        except Exception:
+            has_gst_launch = False
+
+        if not has_gst_launch:
+            self.preflight_results[label] = {
+                "status": "skipped",
+                "reason": "gst-launch-1.0 unavailable",
+            }
+            return True
+
+        probe_pipeline = self._build_gst_preflight_pipeline(pipeline)
+        if not probe_pipeline:
+            self.preflight_results[label] = {"status": "skipped", "reason": "empty pipeline"}
+            return False
+
+        try:
+            cmd = ["gst-launch-1.0", "-q"] + shlex.split(probe_pipeline)
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=max(1.0, float(timeout_seconds)),
+                check=False,
+            )
+            ok = result.returncode == 0
+            self.preflight_results[label] = {
+                "status": "pass" if ok else "fail",
+                "returncode": result.returncode,
+                "stderr": (result.stderr or "").strip()[:500],
+            }
+            if not ok:
+                logger.info("GST preflight rejected %s (rc=%s)", label, result.returncode)
+            return ok
+        except subprocess.TimeoutExpired:
+            self.preflight_results[label] = {"status": "fail", "reason": "timeout"}
+            logger.info("GST preflight timeout for %s", label)
+            return False
+        except Exception as e:
+            self.preflight_results[label] = {"status": "error", "reason": str(e)[:240]}
+            logger.info("GST preflight error for %s: %s", label, e)
+            return False
+
     def _apply_device_profile_to_pipeline(self, pipeline: str) -> str:
         """Rebind pipeline string to this camera device and profile dimensions."""
         if not isinstance(pipeline, str) or not pipeline:
@@ -1038,46 +1222,72 @@ class CameraCapture:
                     )
 
                 if hardware_candidates_allowed:
-                    usb_candidates.append(
-                        {
-                            "source": self._build_usb_pipeline_mjpeg_hw(
-                                int(self.capture_width),
-                                int(self.capture_height),
-                                int(self.capture_fps),
-                            ),
-                            "backend": cv2.CAP_GSTREAMER,
-                            "label": (
-                                "USB hardware pipeline profile-locked "
-                                f"({self.capture_width}x{self.capture_height}@{self.capture_fps})"
-                            ),
-                            "format_key": "mjpeg",
-                        }
-                    )
-                    usb_candidates.append(
-                        {
-                            "source": USB_GST_PIPELINE_HW,
-                            "backend": cv2.CAP_GSTREAMER,
-                            "label": "USB hardware pipeline (nvjpegdec/nvvidconv)",
-                            "format_key": "mjpeg",
-                        }
-                    )
-                    if CAMERA_ALLOW_YUY2_FALLBACK and not self.force_mjpeg:
+                    if self.usb_hw_mode_lock:
+                        locked_candidate = self._build_locked_mjpeg_mode_candidate()
+                        if locked_candidate is not None:
+                            usb_candidates.append(locked_candidate)
+                        else:
+                            logger.warning(
+                                "USB HW mode-lock requested but no MJPEG mode detected for %s; falling back to standard HW candidates",
+                                self.camera_device,
+                            )
+
+                    if not usb_candidates or not self.usb_hw_mode_lock:
                         usb_candidates.append(
                             {
-                                "source": USB_GST_PIPELINE_RAW_HW_UYVY,
+                                "source": self._build_usb_pipeline_mjpeg_hw_stable(
+                                    int(self.capture_width),
+                                    int(self.capture_height),
+                                    int(self.capture_fps),
+                                ),
                                 "backend": cv2.CAP_GSTREAMER,
-                                "label": "USB raw hardware pipeline UYVY (v4l2src + nvvidconv)",
-                                "format_key": "uyvy",
+                                "label": (
+                                    "USB hardware pipeline stabilized "
+                                    f"({self.capture_width}x{self.capture_height}@{self.capture_fps})"
+                                ),
+                                "format_key": "mjpeg",
                             }
                         )
                         usb_candidates.append(
                             {
-                                "source": USB_GST_PIPELINE_RAW_HW_YUY2,
+                                "source": self._build_usb_pipeline_mjpeg_hw(
+                                    int(self.capture_width),
+                                    int(self.capture_height),
+                                    int(self.capture_fps),
+                                ),
                                 "backend": cv2.CAP_GSTREAMER,
-                                "label": "USB raw hardware pipeline YUY2 (v4l2src + nvvidconv)",
-                                "format_key": "yuy2",
+                                "label": (
+                                    "USB hardware pipeline profile-locked "
+                                    f"({self.capture_width}x{self.capture_height}@{self.capture_fps})"
+                                ),
+                                "format_key": "mjpeg",
                             }
                         )
+                        usb_candidates.append(
+                            {
+                                "source": USB_GST_PIPELINE_HW,
+                                "backend": cv2.CAP_GSTREAMER,
+                                "label": "USB hardware pipeline (nvjpegdec/nvvidconv)",
+                                "format_key": "mjpeg",
+                            }
+                        )
+                        if CAMERA_ALLOW_YUY2_FALLBACK and not self.force_mjpeg:
+                            usb_candidates.append(
+                                {
+                                    "source": USB_GST_PIPELINE_RAW_HW_UYVY,
+                                    "backend": cv2.CAP_GSTREAMER,
+                                    "label": "USB raw hardware pipeline UYVY (v4l2src + nvvidconv)",
+                                    "format_key": "uyvy",
+                                }
+                            )
+                            usb_candidates.append(
+                                {
+                                    "source": USB_GST_PIPELINE_RAW_HW_YUY2,
+                                    "backend": cv2.CAP_GSTREAMER,
+                                    "label": "USB raw hardware pipeline YUY2 (v4l2src + nvvidconv)",
+                                    "format_key": "yuy2",
+                                }
+                            )
 
                 if self.camera_acceleration_mode in ("auto", "compat") and not CAMERA_REQUIRE_HARDWARE_ACCEL:
                     usb_candidates.append(
@@ -1148,6 +1358,17 @@ class CameraCapture:
                 if dedupe_key in tried_sources:
                     continue
                 tried_sources.add(dedupe_key)
+
+                if (
+                    CAMERA_SOURCE == "usb"
+                    and self.usb_preflight_validate
+                    and backend == cv2.CAP_GSTREAMER
+                    and isinstance(source, str)
+                    and "v4l2src" in source
+                ):
+                    if not self._gst_preflight_check(source, label):
+                        logger.info("Skipping %s due to failing GST preflight", label)
+                        continue
 
                 cap = self._open_capture(source, backend, label)
                 if cap is not None:
@@ -1229,6 +1450,10 @@ class CameraCapture:
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 except Exception:
                     pass
+
+                if backend is None and isinstance(source, str) and source.startswith("/dev/video"):
+                    self._tune_direct_v4l2_capture(cap)
+
                 logger.info("Camera opened using %s", label)
                 return cap
 
@@ -1527,6 +1752,10 @@ class CameraCapture:
             },
             "detected_usb_modes": self.detected_usb_modes,
             "startup_probe_enabled": self.startup_probe_enabled,
+            "usb_preflight_validate": self.usb_preflight_validate,
+            "usb_hw_mode_lock": self.usb_hw_mode_lock,
+            "usb_v4l2_io_mode": self.usb_v4l2_io_mode,
+            "preflight_results": self.preflight_results,
             "startup_probe_formats": self.startup_probe_formats,
             "startup_probe_scores": self.startup_probe_scores,
             "startup_probe_order": self.startup_probe_order,

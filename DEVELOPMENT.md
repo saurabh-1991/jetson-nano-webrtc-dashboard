@@ -195,6 +195,21 @@ npm run dev
    - UI switches to **Mode: MJPEG** with fallback notice
 4. Validate GPIO controls and device status updates
 
+### 6.1 Validate dual-camera endpoints (current default behavior)
+
+```bash
+# Enabled logical cameras
+curl http://localhost:8000/api/camera/enabled
+
+# Per-camera health snapshots
+curl "http://localhost:8000/api/camera/info?camera_id=cam1"
+curl "http://localhost:8000/api/camera/info?camera_id=cam2"
+
+# Per-camera single-frame checks
+curl -o /tmp/cam1.jpg "http://localhost:8000/api/camera/frame?camera_id=cam1"
+curl -o /tmp/cam2.jpg "http://localhost:8000/api/camera/frame?camera_id=cam2"
+```
+
 ### 7. Verify NVIDIA acceleration inside container
 
 ### 7. Verify JetPack-native acceleration on host
@@ -230,6 +245,18 @@ docker run --runtime nvidia --privileged -p 8000:8000 --device /dev:/dev jetson-
 docker inspect jetson-nano-backend --format '{{json .HostConfig.Runtime}}'
 docker exec -it jetson-nano-backend bash -lc "gst-inspect-1.0 nvvidconv && gst-inspect-1.0 nvjpegdec"
 ```
+
+### Recommended JP4.6 compose-compatible runtime path
+
+On older Jetson compose versions, use the canonical helper after compose startup:
+
+```bash
+cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
+docker-compose up -d
+./scripts/run_backend_with_nvidia_runtime.sh
+```
+
+This preserves the compose network while recreating backend with `--runtime nvidia` and the expected network alias for frontend API proxying.
 
 Notes:
 
@@ -457,7 +484,7 @@ sudo usermod -a -G gpio $USER
 
 ## Environment Variables
 
-Create `.env` file in project root:
+Use the existing `.env` file in the project root (or copy from `.env.example` if you need to reset values):
 
 ```bash
 # Backend
