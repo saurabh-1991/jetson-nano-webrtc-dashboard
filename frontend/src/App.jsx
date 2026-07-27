@@ -11,7 +11,7 @@ import './App.css'
 function App() {
   const [showLogs, setShowLogs] = useState(false)
   const [softwareVersion, setSoftwareVersion] = useState('unknown')
-  const [enabledCameraIds, setEnabledCameraIds] = useState(['cam1', 'cam2'])
+  const [enabledCameraIds, setEnabledCameraIds] = useState(['cam1'])
 
   useEffect(() => {
     let mounted = true
@@ -27,9 +27,15 @@ function App() {
           ? infoResponse?.value?.data?.software?.label
           : null
 
-        const enabledIds = cameraResponse.status === 'fulfilled'
+        const enabledIdsFromCameraApi = cameraResponse.status === 'fulfilled'
           ? cameraResponse?.value?.data?.enabled_camera_ids
           : null
+        const enabledIdsFromSystemInfo = infoResponse.status === 'fulfilled'
+          ? infoResponse?.value?.data?.camera?.enabled_camera_ids
+          : null
+        const enabledIds = Array.isArray(enabledIdsFromCameraApi) && enabledIdsFromCameraApi.length > 0
+          ? enabledIdsFromCameraApi
+          : enabledIdsFromSystemInfo
 
         if (mounted && label) {
           setSoftwareVersion(label)
