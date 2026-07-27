@@ -10,12 +10,18 @@ import cv2
 import numpy as np
 from .config import (
     CAMERA_ACCELERATION,
+    CAMERA2_ADAPTIVE_EXPOSURE,
     CAMERA_DEVICE,
     CAMERA_DEFAULT_ID,
     CAMERA_BUFFER_FLUSH_GRABS,
+    CAMERA2_EXPOSURE_ADAPT_INTERVAL_SECONDS,
+    CAMERA2_EXPOSURE_STEP,
+    CAMERA2_GAIN_STEP,
     CAMERA_FPS,
     CAMERA_HEIGHT,
     CAMERA2_DEVICE_HINT,
+    CAMERA2_LUMA_TARGET,
+    CAMERA2_LUMA_TOLERANCE,
     CAMERA_PROFILES,
     CAMERA_SOURCE,
     CAMERA_USB_STARTUP_PROBE,
@@ -76,6 +82,7 @@ class CameraCapture:
         self.capture_width = int(profile.get("width") or CAMERA_WIDTH)
         self.capture_height = int(profile.get("height") or CAMERA_HEIGHT)
         self.capture_fps = max(1, int(profile.get("fps") or CAMERA_FPS))
+        self.jpeg_quality = int(profile.get("jpeg_quality") or 80)
         self.buffer_flush_grabs = max(0, int(CAMERA_BUFFER_FLUSH_GRABS))
         self.cap = None
         self.is_open = False
@@ -120,9 +127,150 @@ class CameraCapture:
         self._next_recovery_allowed_ts = 0.0
         self._last_recovery_ts = None
         self._last_recovery_reason = None
+        self._adaptive_exposure_enabled = bool(CAMERA2_ADAPTIVE_EXPOSURE and self.camera_id == "cam2")
+        self._next_exposure_adjust_ts = 0.0
+        self._last_luma_mean = None
+        self._v4l2_ctrl_ranges = {}
+        self._current_exposure_absolute = None
+        self._current_gain = None
         self.opencv_gstreamer_enabled = self._check_opencv_gstreamer_support()
         self._detect_cuda_capability()
         self._initialize_camera()
+
+    def _set_v4l2_control(self, control_name: str, value: int) -> bool:
+        try:
+            result = subprocess.run(
+                [
+                    "v4l2-ctl",
+                    "--device",
+                    self.camera_device,
+                    "--set-ctrl",
+                    f"{control_name}={int(value)}",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=1.5,
+                check=False,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _load_v4l2_control_ranges(self):
+        """Parse available V4L2 control ranges for adaptive low-light tuning."""
+        self._v4l2_ctrl_ranges = {}
+        try:
+            result = subprocess.run(
+                ["v4l2-ctl", "--device", self.camera_device, "-L"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=2.0,
+                check=False,
+            )
+            if result.returncode != 0:
+                return
+
+            for raw_line in (result.stdout or "").splitlines():
+                line = raw_line.strip()
+                if not line or ":" not in line:
+                    continue
+                name = line.split(":", 1)[0].strip()
+                min_match = re.search(r"min=(-?\d+)", line)
+                max_match = re.search(r"max=(-?\d+)", line)
+                default_match = re.search(r"default=(-?\d+)", line)
+                if min_match and max_match:
+                    self._v4l2_ctrl_ranges[name] = {
+                        "min": int(min_match.group(1)),
+                        "max": int(max_match.group(1)),
+                        "default": int(default_match.group(1)) if default_match else None,
+                    }
+        except Exception:
+            self._v4l2_ctrl_ranges = {}
+
+    def _apply_initial_ir_low_light_controls(self):
+        """Apply best-effort defaults for dark-room IR usage on UVC cameras."""
+        if not self._adaptive_exposure_enabled:
+            return
+
+        self._load_v4l2_control_ranges()
+
+        # Try enabling auto exposure priority mode first where supported.
+        self._set_v4l2_control("exposure_auto", 3)
+        self._set_v4l2_control("exposure_auto_priority", 1)
+
+        if "exposure_absolute" in self._v4l2_ctrl_ranges:
+            ctrl = self._v4l2_ctrl_ranges["exposure_absolute"]
+            default_val = ctrl.get("default")
+            if default_val is None:
+                default_val = int((ctrl["min"] + ctrl["max"]) / 2)
+            self._current_exposure_absolute = max(ctrl["min"], min(ctrl["max"], int(default_val)))
+
+        if "gain" in self._v4l2_ctrl_ranges:
+            ctrl = self._v4l2_ctrl_ranges["gain"]
+            default_val = ctrl.get("default")
+            if default_val is None:
+                default_val = int((ctrl["min"] + ctrl["max"]) / 3)
+            self._current_gain = max(ctrl["min"], min(ctrl["max"], int(default_val)))
+
+    def _maybe_adapt_ir_exposure(self, frame_bgr: np.ndarray):
+        """Adjust exposure/gain occasionally based on frame luminance for low-light IR scene."""
+        if not self._adaptive_exposure_enabled:
+            return
+
+        now_ts = time.time()
+        if now_ts < self._next_exposure_adjust_ts:
+            return
+        self._next_exposure_adjust_ts = now_ts + float(CAMERA2_EXPOSURE_ADAPT_INTERVAL_SECONDS)
+
+        if frame_bgr is None or frame_bgr.size == 0:
+            return
+
+        try:
+            gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+            luma = float(np.mean(gray))
+            self._last_luma_mean = luma
+        except Exception:
+            return
+
+        lower = float(CAMERA2_LUMA_TARGET) - float(CAMERA2_LUMA_TOLERANCE)
+        upper = float(CAMERA2_LUMA_TARGET) + float(CAMERA2_LUMA_TOLERANCE)
+
+        if lower <= luma <= upper:
+            return
+
+        # If very dark: increase exposure first, then gain.
+        if luma < lower:
+            if self._current_exposure_absolute is not None and "exposure_absolute" in self._v4l2_ctrl_ranges:
+                ctrl = self._v4l2_ctrl_ranges["exposure_absolute"]
+                new_val = min(ctrl["max"], int(self._current_exposure_absolute) + int(CAMERA2_EXPOSURE_STEP))
+                if new_val != self._current_exposure_absolute and self._set_v4l2_control("exposure_absolute", new_val):
+                    self._current_exposure_absolute = new_val
+                    return
+
+            if self._current_gain is not None and "gain" in self._v4l2_ctrl_ranges:
+                ctrl = self._v4l2_ctrl_ranges["gain"]
+                new_val = min(ctrl["max"], int(self._current_gain) + int(CAMERA2_GAIN_STEP))
+                if new_val != self._current_gain and self._set_v4l2_control("gain", new_val):
+                    self._current_gain = new_val
+                    return
+
+        # If too bright: reduce gain first, then exposure.
+        if luma > upper:
+            if self._current_gain is not None and "gain" in self._v4l2_ctrl_ranges:
+                ctrl = self._v4l2_ctrl_ranges["gain"]
+                new_val = max(ctrl["min"], int(self._current_gain) - int(CAMERA2_GAIN_STEP))
+                if new_val != self._current_gain and self._set_v4l2_control("gain", new_val):
+                    self._current_gain = new_val
+                    return
+
+            if self._current_exposure_absolute is not None and "exposure_absolute" in self._v4l2_ctrl_ranges:
+                ctrl = self._v4l2_ctrl_ranges["exposure_absolute"]
+                new_val = max(ctrl["min"], int(self._current_exposure_absolute) - int(CAMERA2_EXPOSURE_STEP))
+                if new_val != self._current_exposure_absolute and self._set_v4l2_control("exposure_absolute", new_val):
+                    self._current_exposure_absolute = new_val
+                    return
 
     def _record_recovery_result(self, success: bool, reason: str):
         """Track recovery outcomes and apply adaptive backoff on repeated failures."""
@@ -786,6 +934,7 @@ class CameraCapture:
                 if cap is not None:
                     self.cap = cap
                     self.is_open = True
+                    self._apply_initial_ir_low_light_controls()
                     self.selected_pipeline = label
                     self.selected_pipeline_mode = self._infer_pipeline_mode(label)
                     self.selected_pipeline_source = source
@@ -924,6 +1073,8 @@ class CameraCapture:
                         processed = self._process_with_cpu(frame)
                 else:
                     processed = self._process_with_cpu(frame)
+
+                self._maybe_adapt_ir_exposure(processed)
 
                 self._last_frame = processed
                 self._last_frame_timestamp = now
@@ -1139,6 +1290,13 @@ class CameraCapture:
                 "last_recovery_reason": self._last_recovery_reason,
             },
             "performance": self.get_performance_stats(),
+            "ir_low_light": {
+                "adaptive_enabled": self._adaptive_exposure_enabled,
+                "last_luma_mean": self._last_luma_mean,
+                "exposure_absolute": self._current_exposure_absolute,
+                "gain": self._current_gain,
+                "next_adjust_in_seconds": max(0.0, self._next_exposure_adjust_ts - time.time()),
+            },
         }
 
     def __del__(self):

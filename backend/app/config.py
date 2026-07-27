@@ -13,6 +13,8 @@ CAMERA2_HEIGHT = int(os.getenv("CAMERA2_HEIGHT", "480"))
 CAMERA2_FPS = int(os.getenv("CAMERA2_FPS", "20"))
 CAMERA_DEFAULT_ID = os.getenv("CAMERA_DEFAULT_ID", "cam1").lower()
 CAMERA2_DEVICE_HINT = os.getenv("CAMERA2_DEVICE_HINT", "arducam,ir")
+CAMERA1_JPEG_QUALITY = max(45, min(95, int(os.getenv("CAMERA1_JPEG_QUALITY", "74"))))
+CAMERA2_JPEG_QUALITY = max(45, min(95, int(os.getenv("CAMERA2_JPEG_QUALITY", "70"))))
 CAMERA_SOURCE = os.getenv("CAMERA_SOURCE", "usb").lower()  # usb | csi
 CAMERA_ACCELERATION = os.getenv("CAMERA_ACCELERATION", "auto").lower()  # auto | hardware | compat
 CAMERA_USB_STARTUP_PROBE = os.getenv("CAMERA_USB_STARTUP_PROBE", "true").lower() in (
@@ -36,16 +38,33 @@ CAMERA_PROFILES = {
         "width": int(os.getenv("CAMERA1_WIDTH", str(CAMERA_WIDTH))),
         "height": int(os.getenv("CAMERA1_HEIGHT", str(CAMERA_HEIGHT))),
         "fps": int(os.getenv("CAMERA1_FPS", str(CAMERA_FPS))),
+        "jpeg_quality": CAMERA1_JPEG_QUALITY,
     },
     "cam2": {
         "device": CAMERA2_DEVICE,
         "width": CAMERA2_WIDTH,
         "height": CAMERA2_HEIGHT,
         "fps": CAMERA2_FPS,
+        "jpeg_quality": CAMERA2_JPEG_QUALITY,
     },
 }
 
 CAMERA_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA_BUFFER_FLUSH_GRABS", "2")))
+
+# IR camera low-light adaptation (best-effort via V4L2 controls)
+CAMERA2_ADAPTIVE_EXPOSURE = os.getenv("CAMERA2_ADAPTIVE_EXPOSURE", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+CAMERA2_EXPOSURE_ADAPT_INTERVAL_SECONDS = max(
+    1.0, float(os.getenv("CAMERA2_EXPOSURE_ADAPT_INTERVAL_SECONDS", "1.5"))
+)
+CAMERA2_LUMA_TARGET = max(20.0, min(220.0, float(os.getenv("CAMERA2_LUMA_TARGET", "85"))))
+CAMERA2_LUMA_TOLERANCE = max(3.0, min(60.0, float(os.getenv("CAMERA2_LUMA_TOLERANCE", "10"))))
+CAMERA2_EXPOSURE_STEP = max(1, int(os.getenv("CAMERA2_EXPOSURE_STEP", "20")))
+CAMERA2_GAIN_STEP = max(1, int(os.getenv("CAMERA2_GAIN_STEP", "4")))
 
 GST_APPSINK_REALTIME = "appsink drop=1 max-buffers=1 sync=false enable-last-sample=false"
 

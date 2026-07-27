@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
-from .config import API_DEBUG, LOG_LEVEL, LOG_FORMAT, CAMERA_DEFAULT_ID
+from .config import API_DEBUG, LOG_LEVEL, LOG_FORMAT, CAMERA_DEFAULT_ID, CAMERA_PROFILES
 from .camera import (
     get_camera,
     check_cuda_availability,
@@ -749,6 +749,9 @@ async def stream_mjpeg(request: Request):
     async def generate():
         stream_session_id = request.query_params.get("sid") or str(uuid.uuid4())
         camera = get_camera(camera_id)
+        profile = CAMERA_PROFILES.get(camera_id, {})
+        jpeg_quality = int(profile.get("jpeg_quality") or getattr(camera, "jpeg_quality", 80) or 80)
+        frame_interval = max(0.005, 1.0 / max(1, int(getattr(camera, "target_fps", 20))))
 
         async with active_mjpeg_lock:
             _ensure_camera_session_bucket(camera_id)
@@ -762,11 +765,12 @@ async def stream_mjpeg(request: Request):
         
         try:
             while True:
+                loop_started = time.perf_counter()
                 if await request.is_disconnected():
                     logger.info("MJPEG client disconnected")
                     break
 
-                success, jpeg_bytes = camera.get_jpeg_frame(quality=80)
+                success, jpeg_bytes = camera.get_jpeg_frame(quality=jpeg_quality)
                 if not success or jpeg_bytes is None:
                     await asyncio.sleep(0.05)
                     continue
@@ -778,8 +782,11 @@ async def stream_mjpeg(request: Request):
                 yield jpeg_bytes
                 yield b"\r\n"
 
-                # Small delay to limit frame rate
-                await asyncio.sleep(0.033)  # ~30 FPS
+                # Pace stream relative to target FPS while minimizing added latency.
+                elapsed = time.perf_counter() - loop_started
+                sleep_for = frame_interval - elapsed
+                if sleep_for > 0:
+                    await asyncio.sleep(sleep_for)
 
         except asyncio.CancelledError:
             logger.info("MJPEG stream cancelled")

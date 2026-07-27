@@ -449,7 +449,7 @@ export const VideoStream = ({
               ? streamMode === 'mjpeg'
                 ? 'Loading MJPEG stream...'
                 : 'Connecting WebRTC...'
-              : 'Click "Start Video" to begin'}
+              : `Click "${startLabel}" to begin`}
           </div>
         )}
       </div>

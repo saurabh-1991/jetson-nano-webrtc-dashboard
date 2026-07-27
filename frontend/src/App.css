@@ -100,29 +100,16 @@ body {
   margin: 0;
 }
 
-.camera-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.9rem;
-}
-
-.camera-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.camera-tile h3 {
-  font-size: 1rem;
-  color: #374151;
-}
-
 .dashboard-section.full-width {
   grid-column: 1 / -1;
 }
 
-.dashboard-section.camera-panel {
+.dashboard-section.camera1-panel {
   grid-column: 1 / span 6;
+}
+
+.dashboard-section.camera2-panel {
+  grid-column: 7 / span 6;
 }
 
 .dashboard-section.controls-panel {
@@ -171,12 +158,9 @@ body {
     grid-column: 1;
   }
 
-  .dashboard-section.camera-panel {
+  .dashboard-section.camera1-panel,
+  .dashboard-section.camera2-panel {
     grid-column: 1;
-  }
-
-  .camera-grid {
-    grid-template-columns: 1fr;
   }
 
   .dashboard-section.controls-panel,
