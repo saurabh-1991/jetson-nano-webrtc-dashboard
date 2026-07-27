@@ -18,6 +18,8 @@ BACKEND_IMAGE="jetsonnanowebrtcdashboard_jetson-backend:latest"
 cd "$PROJECT_DIR"
 
 echo "[nvidia-runtime] Ensuring compose services are up..."
+# If a previously manual NVIDIA backend exists, remove it first so compose can proceed.
+docker rm -f "$BACKEND_NAME" >/dev/null 2>&1 || true
 docker-compose up -d --build
 
 echo "[nvidia-runtime] Replacing backend container with --runtime nvidia..."
