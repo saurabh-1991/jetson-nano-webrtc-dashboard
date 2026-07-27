@@ -9,6 +9,19 @@ export const api = axios.create({
   timeout: 5000,
 })
 
+const errorThrottleMap = new Map()
+const ERROR_THROTTLE_MS = 15000
+
+const shouldThrottleErrorLog = (key) => {
+  const now = Date.now()
+  const lastAt = errorThrottleMap.get(key)
+  if (typeof lastAt === 'number' && (now - lastAt) < ERROR_THROTTLE_MS) {
+    return true
+  }
+  errorThrottleMap.set(key, now)
+  return false
+}
+
 const logEvent = (type, message, severity = 'info', meta = {}) => {
   try {
     if (typeof window !== 'undefined' && typeof window.__jetsonLogEvent === 'function') {
@@ -41,14 +54,33 @@ api.interceptors.response.use(
     return response
   },
   (error) => {
+    const errorCode = String(error?.code || '').toUpperCase()
+    const rawMessage = String(error?.message || '')
+    const message = rawMessage.toLowerCase()
+    const url = error?.config?.url || ''
+    const method = error?.config?.method
     const startedAt = error?.config?.metadata?.startedAt || Date.now()
     const durationMs = Date.now() - startedAt
-    logEvent('api_response_error', error?.message || 'api error', 'error', {
-      status: error?.response?.status,
-      url: error?.config?.url,
-      method: error?.config?.method,
-      durationMs,
-    })
+
+    // Common harmless noise while network path flips or requests are canceled.
+    if (errorCode === 'ERR_CANCELED' || message.includes('canceled')) {
+      return Promise.reject(error)
+    }
+
+    const isNetworkChanged = errorCode === 'ERR_NETWORK_CHANGED' || message.includes('network changed')
+    const isSensorPoll = url.includes('/sensors/latest') || url.includes('/sensors/history')
+    const throttleKey = `${method || 'get'}|${url}|${errorCode || message}`
+
+    if (!(isSensorPoll || isNetworkChanged) || !shouldThrottleErrorLog(throttleKey)) {
+      logEvent('api_response_error', error?.message || 'api error', isNetworkChanged ? 'warning' : 'error', {
+        status: error?.response?.status,
+        url,
+        method,
+        durationMs,
+        code: errorCode || undefined,
+      })
+    }
+
     return Promise.reject(error)
   }
 )

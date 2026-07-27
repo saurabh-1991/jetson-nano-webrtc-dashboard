@@ -23,6 +23,15 @@ const HISTORY_RANGE_OPTIONS = [
   { value: 48, label: 'Last 48h' },
 ]
 
+const SENSOR_POLL_BASE_MS = 2000
+const SENSOR_POLL_MAX_MS = 15000
+const HISTORY_REFRESH_MS = 10000
+
+function getRetryDelayMs(failureCount) {
+  const step = Math.max(0, Math.min(4, Number(failureCount || 0)))
+  return Math.min(SENSOR_POLL_MAX_MS, SENSOR_POLL_BASE_MS * (2 ** step))
+}
+
 function formatValue(value) {
   if (typeof value !== 'number') return '--'
   return `${value.toFixed(1)} °C`
@@ -65,9 +74,20 @@ export const SensorDataSection = () => {
   const [historyHours, setHistoryHours] = useState(24)
   const [lastUpdated, setLastUpdated] = useState(null)
   const [error, setError] = useState(null)
+  const [retryDelayMs, setRetryDelayMs] = useState(SENSOR_POLL_BASE_MS)
 
   useEffect(() => {
     let mounted = true
+    let pollTimer = null
+    let failureCount = 0
+    let lastHistoryFetchAt = 0
+
+    const scheduleNextPoll = (delayMs) => {
+      if (!mounted) return
+      pollTimer = setTimeout(() => {
+        fetchSensorData()
+      }, delayMs)
+    }
 
     const fetchSensorData = async () => {
       try {
@@ -94,29 +114,43 @@ export const SensorDataSection = () => {
           }
         }
 
-        if (!isRealtimeMode) {
+        const nowMs = Date.now()
+        if (!isRealtimeMode && ((nowMs - lastHistoryFetchAt) >= HISTORY_REFRESH_MS)) {
           const historyResponse = await sensorAPI.getHistory({
             limit: 500,
             intervalMinutes: historyIntervalMinutes,
             hours: historyHours,
           })
           setHistory(Array.isArray(historyResponse.data?.history) ? historyResponse.data.history : [])
+          lastHistoryFetchAt = nowMs
         }
 
+        failureCount = 0
+        setRetryDelayMs(SENSOR_POLL_BASE_MS)
         setError(null)
+        scheduleNextPoll(SENSOR_POLL_BASE_MS)
       } catch (err) {
         if (!mounted) return
-        console.error('Failed to fetch sensor data:', err)
-        setError('Unable to load sensor data')
+        const retryMs = getRetryDelayMs(failureCount)
+
+        if (failureCount === 0 || failureCount % 5 === 0) {
+          console.warn('Sensor polling retry due to transient error:', err?.message || err)
+        }
+
+        failureCount += 1
+        setRetryDelayMs(retryMs)
+        setError(`Unable to load sensor data (retrying in ${Math.ceil(retryMs / 1000)}s)`)
+        scheduleNextPoll(retryMs)
       }
     }
 
     fetchSensorData()
-    const interval = setInterval(fetchSensorData, 2000)
 
     return () => {
       mounted = false
-      clearInterval(interval)
+      if (pollTimer) {
+        clearTimeout(pollTimer)
+      }
     }
   }, [historyIntervalMinutes, historyHours, isRealtimeMode])
 
@@ -220,6 +254,10 @@ export const SensorDataSection = () => {
         </div>
 
         {error && <div className="sensor-error">{error}</div>}
+
+        {!error && retryDelayMs > SENSOR_POLL_BASE_MS && (
+          <div className="sensor-error">Transient network issue recovered. Polling every {Math.ceil(retryDelayMs / 1000)}s.</div>
+        )}
 
         <div className="sensor-last-updated">
           Last updated: <strong>{formatDateTime(lastUpdated)}</strong>

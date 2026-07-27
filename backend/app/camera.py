@@ -9,6 +9,7 @@ import glob
 import cv2
 import numpy as np
 from .config import (
+    CAMERA_ALLOW_YUY2_FALLBACK,
     CAMERA_ACCELERATION,
     CAMERA2_ADAPTIVE_EXPOSURE,
     CAMERA_DEVICE,
@@ -16,12 +17,16 @@ from .config import (
     CAMERA_BUFFER_FLUSH_GRABS,
     CAMERA2_EXPOSURE_ADAPT_INTERVAL_SECONDS,
     CAMERA2_EXPOSURE_STEP,
+    CAMERA2_FORCE_MJPEG,
     CAMERA2_GAIN_STEP,
+    CAMERA2_GST_PIPELINE_MJPEG_COMPAT_GRAY8,
+    CAMERA2_GST_PIPELINE_MJPEG_HW_GRAY8,
     CAMERA_FPS,
     CAMERA_HEIGHT,
     CAMERA2_DEVICE_HINT,
     CAMERA2_LUMA_TARGET,
     CAMERA2_LUMA_TOLERANCE,
+    CAMERA2_PREFER_GRAY8,
     CAMERA_PROFILES,
     CAMERA_SOURCE,
     CAMERA_USB_STARTUP_PROBE,
@@ -84,6 +89,8 @@ class CameraCapture:
         self.capture_fps = max(1, int(profile.get("fps") or CAMERA_FPS))
         self.jpeg_quality = int(profile.get("jpeg_quality") or 80)
         self.buffer_flush_grabs = max(0, int(CAMERA_BUFFER_FLUSH_GRABS))
+        self.force_mjpeg = bool(self.camera_id == "cam2" and CAMERA2_FORCE_MJPEG)
+        self.prefer_gray8 = bool(self.camera_id == "cam2" and CAMERA2_PREFER_GRAY8)
         self.cap = None
         self.is_open = False
         self.frame_count = 0
@@ -196,9 +203,9 @@ class CameraCapture:
 
         self._load_v4l2_control_ranges()
 
-        # Try enabling auto exposure priority mode first where supported.
+        # Try enabling auto exposure while disabling FPS-priority behavior that often boosts gain/noise.
         self._set_v4l2_control("exposure_auto", 3)
-        self._set_v4l2_control("exposure_auto_priority", 1)
+        self._set_v4l2_control("exposure_auto_priority", 0)
 
         if "exposure_absolute" in self._v4l2_ctrl_ranges:
             ctrl = self._v4l2_ctrl_ranges["exposure_absolute"]
@@ -228,7 +235,10 @@ class CameraCapture:
             return
 
         try:
-            gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+            if len(frame_bgr.shape) == 2:
+                gray = frame_bgr
+            else:
+                gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
             luma = float(np.mean(gray))
             self._last_luma_mean = luma
         except Exception:
@@ -452,7 +462,7 @@ class CameraCapture:
                 }
             )
 
-        if yuy2_mode:
+        if yuy2_mode and CAMERA_ALLOW_YUY2_FALLBACK and not self.force_mjpeg:
             yw, yh, yfps = yuy2_mode
             candidates.append(
                 {
@@ -481,7 +491,7 @@ class CameraCapture:
             preferred.append(("MJPG", mjpeg_mode))
 
         yuy2_mode = self._pick_best_mode(self.detected_usb_modes.get("yuy2", []), 640, 480, 30)
-        if yuy2_mode:
+        if yuy2_mode and CAMERA_ALLOW_YUY2_FALLBACK and not self.force_mjpeg:
             preferred.append(("YUYV", yuy2_mode))
 
         if not preferred:
@@ -828,6 +838,24 @@ class CameraCapture:
 
                 usb_candidates = []
 
+                if self.camera_id == "cam2" and self.prefer_gray8:
+                    usb_candidates.append(
+                        {
+                            "source": CAMERA2_GST_PIPELINE_MJPEG_HW_GRAY8,
+                            "backend": cv2.CAP_GSTREAMER,
+                            "label": "Cam2 MJPEG hardware pipeline GRAY8 (nvjpegdec)",
+                            "format_key": "mjpeg",
+                        }
+                    )
+                    usb_candidates.append(
+                        {
+                            "source": CAMERA2_GST_PIPELINE_MJPEG_COMPAT_GRAY8,
+                            "backend": cv2.CAP_GSTREAMER,
+                            "label": "Cam2 MJPEG compatibility pipeline GRAY8",
+                            "format_key": "mjpeg",
+                        }
+                    )
+
                 # Adaptive compatibility pipelines from detected camera formats are tried first,
                 # because they are validated via gst-inspect + v4l2 mode introspection.
                 adaptive_candidates = self._build_adaptive_usb_candidates()
@@ -848,22 +876,23 @@ class CameraCapture:
                             "format_key": "mjpeg",
                         }
                     )
-                    usb_candidates.append(
-                        {
-                            "source": USB_GST_PIPELINE_RAW_HW_UYVY,
-                            "backend": cv2.CAP_GSTREAMER,
-                            "label": "USB raw hardware pipeline UYVY (v4l2src + nvvidconv)",
-                            "format_key": "uyvy",
-                        }
-                    )
-                    usb_candidates.append(
-                        {
-                            "source": USB_GST_PIPELINE_RAW_HW_YUY2,
-                            "backend": cv2.CAP_GSTREAMER,
-                            "label": "USB raw hardware pipeline YUY2 (v4l2src + nvvidconv)",
-                            "format_key": "yuy2",
-                        }
-                    )
+                    if CAMERA_ALLOW_YUY2_FALLBACK and not self.force_mjpeg:
+                        usb_candidates.append(
+                            {
+                                "source": USB_GST_PIPELINE_RAW_HW_UYVY,
+                                "backend": cv2.CAP_GSTREAMER,
+                                "label": "USB raw hardware pipeline UYVY (v4l2src + nvvidconv)",
+                                "format_key": "uyvy",
+                            }
+                        )
+                        usb_candidates.append(
+                            {
+                                "source": USB_GST_PIPELINE_RAW_HW_YUY2,
+                                "backend": cv2.CAP_GSTREAMER,
+                                "label": "USB raw hardware pipeline YUY2 (v4l2src + nvvidconv)",
+                                "format_key": "yuy2",
+                            }
+                        )
 
                 if CAMERA_ACCELERATION in ("auto", "compat"):
                     usb_candidates.append(
@@ -874,22 +903,23 @@ class CameraCapture:
                             "format_key": "mjpeg",
                         }
                     )
-                    usb_candidates.append(
-                        {
-                            "source": USB_GST_PIPELINE_COMPAT_RAW,
-                            "backend": cv2.CAP_GSTREAMER,
-                            "label": "USB raw compatibility pipeline (videoconvert)",
-                            "format_key": "any",
-                        }
-                    )
-                    usb_candidates.append(
-                        {
-                            "source": USB_GST_PIPELINE_COMPAT_ANY,
-                            "backend": cv2.CAP_GSTREAMER,
-                            "label": "USB permissive compatibility pipeline (no strict caps)",
-                            "format_key": "any",
-                        }
-                    )
+                    if CAMERA_ALLOW_YUY2_FALLBACK and not self.force_mjpeg:
+                        usb_candidates.append(
+                            {
+                                "source": USB_GST_PIPELINE_COMPAT_RAW,
+                                "backend": cv2.CAP_GSTREAMER,
+                                "label": "USB raw compatibility pipeline (videoconvert)",
+                                "format_key": "any",
+                            }
+                        )
+                        usb_candidates.append(
+                            {
+                                "source": USB_GST_PIPELINE_COMPAT_ANY,
+                                "backend": cv2.CAP_GSTREAMER,
+                                "label": "USB permissive compatibility pipeline (no strict caps)",
+                                "format_key": "any",
+                            }
+                        )
 
                 usb_candidates = self._reorder_usb_candidates_with_probe(usb_candidates)
                 for candidate in usb_candidates:
@@ -1265,6 +1295,7 @@ class CameraCapture:
                 "width": self.capture_width,
                 "height": self.capture_height,
                 "fps": self.capture_fps,
+                "jpeg_quality": self.jpeg_quality,
             },
             "selected_pipeline": self.selected_pipeline,
             "selected_pipeline_mode": self.selected_pipeline_mode,
@@ -1296,6 +1327,8 @@ class CameraCapture:
                 "exposure_absolute": self._current_exposure_absolute,
                 "gain": self._current_gain,
                 "next_adjust_in_seconds": max(0.0, self._next_exposure_adjust_ts - time.time()),
+                "force_mjpeg": self.force_mjpeg,
+                "prefer_gray8": self.prefer_gray8,
             },
         }
 

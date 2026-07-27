@@ -4,10 +4,12 @@ import './DeviceStatus.css'
 
 export const DeviceStatus = () => {
   const [status, setStatus] = useState(null)
+  const [cameras, setCameras] = useState({ cam1: null, cam2: null })
+  const [cameraLastUpdatedAt, setCameraLastUpdatedAt] = useState(0)
   const [loading, setLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [isRecoveringCamera, setIsRecoveringCamera] = useState(false)
-  const [recoverMessage, setRecoverMessage] = useState('')
+  const [isRecoveringCamera, setIsRecoveringCamera] = useState({ cam1: false, cam2: false })
+  const [recoverMessage, setRecoverMessage] = useState({ cam1: '', cam2: '' })
   const [error, setError] = useState(null)
 
   const fetchStatus = async () => {
@@ -25,18 +27,46 @@ export const DeviceStatus = () => {
     }
   }
 
-  useEffect(() => {
-    // Fetch immediately and then every 5 seconds
-    fetchStatus()
-    const interval = setInterval(fetchStatus, 5000)
+  const fetchCameras = async () => {
+    try {
+      const [cam1Response, cam2Response] = await Promise.allSettled([
+        cameraAPI.getInfo('cam1'),
+        cameraAPI.getInfo('cam2'),
+      ])
 
-    return () => clearInterval(interval)
+      setCameras((prev) => ({
+        cam1: cam1Response.status === 'fulfilled' ? (cam1Response.value?.data || null) : prev.cam1,
+        cam2: cam2Response.status === 'fulfilled' ? (cam2Response.value?.data || null) : prev.cam2,
+      }))
+
+      if (cam1Response.status === 'fulfilled' || cam2Response.status === 'fulfilled') {
+        setCameraLastUpdatedAt(Date.now())
+      }
+    } catch (_err) {
+      // Ignore - keep last known camera state to avoid UI flicker.
+    }
+  }
+
+  useEffect(() => {
+    // Fetch immediately and then refresh.
+    fetchStatus()
+    fetchCameras()
+
+    const statusInterval = setInterval(fetchStatus, 5000)
+    const cameraInterval = setInterval(fetchCameras, 1500)
+
+    return () => {
+      clearInterval(statusInterval)
+      clearInterval(cameraInterval)
+    }
   }, [])
 
-  const handleManualRecoverCamera = async () => {
-    if (isRecoveringCamera) {
+  const handleManualRecoverCamera = async (cameraId) => {
+    if (isRecoveringCamera?.[cameraId]) {
       return
     }
+
+    const camera = cameras?.[cameraId]
 
     if (camera?.is_open) {
       const confirmed = window.confirm(
@@ -48,19 +78,22 @@ export const DeviceStatus = () => {
     }
 
     try {
-      setIsRecoveringCamera(true)
-      setRecoverMessage('Recovering camera...')
-      const response = await cameraAPI.recover('manual_operator_button')
+      setIsRecoveringCamera((prev) => ({ ...prev, [cameraId]: true }))
+      setRecoverMessage((prev) => ({ ...prev, [cameraId]: 'Recovering camera...' }))
+      const response = await cameraAPI.recover('manual_operator_button', cameraId)
       const ok = !!response?.data?.success
-      setRecoverMessage(ok ? 'Camera recovery completed.' : 'Camera recovery attempted (still unavailable).')
-      await fetchStatus()
+      setRecoverMessage((prev) => ({
+        ...prev,
+        [cameraId]: ok ? 'Camera recovery completed.' : 'Camera recovery attempted (still unavailable).',
+      }))
+      await Promise.all([fetchStatus(), fetchCameras()])
     } catch (recoverError) {
       console.error('Failed to recover camera:', recoverError)
-      setRecoverMessage('Camera recovery request failed.')
+      setRecoverMessage((prev) => ({ ...prev, [cameraId]: 'Camera recovery request failed.' }))
     } finally {
-      setIsRecoveringCamera(false)
+      setIsRecoveringCamera((prev) => ({ ...prev, [cameraId]: false }))
       setTimeout(() => {
-        setRecoverMessage('')
+        setRecoverMessage((prev) => ({ ...prev, [cameraId]: '' }))
       }, 4500)
     }
   }
@@ -73,82 +106,103 @@ export const DeviceStatus = () => {
     return <div className="device-status-container error">{error}</div>
   }
 
-  const camera = status?.camera || {}
-  const recovery = camera?.recovery || {}
-  const recoveryFailures = Number(recovery?.failures || 0)
-  const consecutiveRecoveryFailures = Number(recovery?.consecutive_failures || 0)
-  const recoveryState = consecutiveRecoveryFailures > 0
-    ? 'degraded'
-    : recoveryFailures > 0
-      ? 'warning'
-      : 'healthy'
+  const cameraEntries = [
+    { id: 'cam1', label: 'Camera 1 (Main)' },
+    { id: 'cam2', label: 'Camera 2 (IR)' },
+  ]
 
-  const recoveryStateText = recoveryState === 'degraded'
-    ? 'Degraded'
-    : recoveryState === 'warning'
-      ? 'Recovered'
-      : 'Healthy'
+  const cameraStatusFresh = cameraLastUpdatedAt > 0 && (Date.now() - cameraLastUpdatedAt) <= 3500
 
   return (
     <div className="device-status-container">
       <h2>Status / Indicator</h2>
 
       <div className="status-grid">
-        {/* Camera Status */}
-        {status?.camera && (
-          <div className="status-card">
-            <div className="card-title">Camera</div>
-            <div className="card-content">
-              <div className="camera-primary-stats">
-                <span className={`camera-stat-chip ${status.camera.is_open ? 'ok' : 'bad'}`}>
-                  {status.camera.is_open ? 'Active' : 'Inactive'}
-                </span>
-                <span className={`health-badge ${recoveryState}`}>{recoveryStateText}</span>
-                <span className="camera-stat-chip neutral">Frames: {status.camera.frame_count}</span>
-                <button
-                  type="button"
-                  className="camera-recover-btn"
-                  onClick={handleManualRecoverCamera}
-                  disabled={isRecoveringCamera}
-                  title="Manual camera recovery if auto-recovery does not restore stream"
-                >
-                  {isRecoveringCamera ? 'Recovering…' : 'Reset Camera'}
-                </button>
-              </div>
-
-              {recoverMessage && (
-                <div className="camera-recover-feedback">{recoverMessage}</div>
-              )}
-
-              <div className="camera-meta-line">
-                <span className="label">Active Device:</span>
-                <span className="value value-small">{camera?.selected_source || 'Not selected yet'}</span>
-              </div>
-
-              <div className="camera-recovery-grid">
-                <div className="camera-recovery-item">
-                  <span className="label">Attempts</span>
-                  <span className="value">{Number(recovery?.attempts || 0)}</span>
-                </div>
-                <div className="camera-recovery-item">
-                  <span className="label">Successes</span>
-                  <span className="value">{Number(recovery?.successes || 0)}</span>
-                </div>
-                <div className="camera-recovery-item">
-                  <span className="label">Failures</span>
-                  <span className={`value ${recoveryFailures > 0 ? 'inactive' : 'active'}`}>{recoveryFailures}</span>
-                </div>
-              </div>
-
-              {recovery?.last_recovery_reason && (
-                <div className="camera-meta-line">
-                  <span className="label">Last Recovery:</span>
-                  <span className="value value-small">{recovery.last_recovery_reason}</span>
-                </div>
-              )}
-            </div>
+        <div className="status-card">
+          <div className="card-title">Cameras</div>
+          <div className="camera-status-freshness-row">
+            <span className={`refresh-indicator ${isRefreshing ? 'active' : ''}`}>
+              {isRefreshing ? 'Refreshing…' : 'Auto-refresh'}
+            </span>
+            <span className={`health-badge ${cameraStatusFresh ? 'healthy' : 'warning'}`}>
+              {cameraStatusFresh ? 'Live' : 'Delayed'}
+            </span>
           </div>
-        )}
+          <div className="camera-cards-grid">
+            {cameraEntries.map(({ id, label }) => {
+              const camera = cameras?.[id] || {}
+              const recovery = camera?.pipeline_diagnostics?.recovery || {}
+              const recoveryFailures = Number(recovery?.failures || 0)
+              const consecutiveRecoveryFailures = Number(recovery?.consecutive_failures || 0)
+              const recoveryState = consecutiveRecoveryFailures > 0
+                ? 'degraded'
+                : recoveryFailures > 0
+                  ? 'warning'
+                  : 'healthy'
+
+              const recoveryStateText = recoveryState === 'degraded'
+                ? 'Degraded'
+                : recoveryState === 'warning'
+                  ? 'Recovered'
+                  : 'Healthy'
+
+              return (
+                <div key={id} className="camera-subcard">
+                  <div className="camera-subcard-title">{label}</div>
+                  <div className="camera-primary-stats">
+                    <span className={`camera-stat-chip ${camera?.is_open ? 'ok' : 'bad'}`}>
+                      {camera?.is_open ? 'Active' : 'Inactive'}
+                    </span>
+                    <span className={`health-badge ${recoveryState}`}>{recoveryStateText}</span>
+                    <span className="camera-stat-chip neutral">Frames: {Number(camera?.frame_count || 0)}</span>
+                    <button
+                      type="button"
+                      className="camera-recover-btn"
+                      onClick={() => handleManualRecoverCamera(id)}
+                      disabled={!!isRecoveringCamera?.[id]}
+                      title="Manual camera recovery if auto-recovery does not restore stream"
+                    >
+                      {isRecoveringCamera?.[id] ? 'Recovering…' : 'Reset'}
+                    </button>
+                  </div>
+
+                  {recoverMessage?.[id] && (
+                    <div className="camera-recover-feedback">{recoverMessage[id]}</div>
+                  )}
+
+                  <div className="camera-meta-line">
+                    <span className="label">Active Device:</span>
+                    <span className="value value-small">
+                      {camera?.pipeline_diagnostics?.selected_pipeline_source || 'Not selected yet'}
+                    </span>
+                  </div>
+
+                  <div className="camera-recovery-grid">
+                    <div className="camera-recovery-item">
+                      <span className="label">Attempts</span>
+                      <span className="value">{Number(recovery?.attempts || 0)}</span>
+                    </div>
+                    <div className="camera-recovery-item">
+                      <span className="label">Successes</span>
+                      <span className="value">{Number(recovery?.successes || 0)}</span>
+                    </div>
+                    <div className="camera-recovery-item">
+                      <span className="label">Failures</span>
+                      <span className={`value ${recoveryFailures > 0 ? 'inactive' : 'active'}`}>{recoveryFailures}</span>
+                    </div>
+                  </div>
+
+                  {recovery?.last_recovery_reason && (
+                    <div className="camera-meta-line">
+                      <span className="label">Last Recovery:</span>
+                      <span className="value value-small">{recovery.last_recovery_reason}</span>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
 
         {/* Input Signal Indicators */}
         {status?.gpio?.inputs && (

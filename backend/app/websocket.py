@@ -142,16 +142,20 @@ async def process_websocket_message(websocket: WebSocket, message: dict):
 
 def get_device_status() -> dict:
     """Get current device status"""
-    camera = getattr(camera_module, "camera", None)
-    gpio = get_gpio_controller()
-    cuda_info = check_cuda_availability()
-    diagnostics = camera.get_runtime_diagnostics() if camera else {}
-    recovery = diagnostics.get("recovery", {}) if diagnostics else {}
-    selected_source = diagnostics.get("selected_pipeline_source") if diagnostics else None
-    selected_pipeline = diagnostics.get("selected_pipeline") if diagnostics else None
-    
-    return {
-        "camera": {
+    cameras_status = {}
+    try:
+        camera_ids = camera_module.get_camera_ids()
+    except Exception:
+        camera_ids = ["cam1"]
+
+    for camera_id in camera_ids:
+        camera = camera_module.get_camera(camera_id)
+        diagnostics = camera.get_runtime_diagnostics() if camera else {}
+        recovery = diagnostics.get("recovery", {}) if diagnostics else {}
+        selected_source = diagnostics.get("selected_pipeline_source") if diagnostics else None
+        selected_pipeline = diagnostics.get("selected_pipeline") if diagnostics else None
+        cameras_status[camera_id] = {
+            "camera_id": camera_id,
             "is_open": camera.is_open if camera else False,
             "frame_count": camera.get_frame_count() if camera else 0,
             "selected_source": selected_source,
@@ -164,7 +168,21 @@ def get_device_status() -> dict:
                 "next_recovery_allowed_in_seconds": float(recovery.get("next_recovery_allowed_in_seconds", 0.0)),
                 "last_recovery_reason": recovery.get("last_recovery_reason"),
             },
+        }
+
+    legacy_camera = cameras_status.get("cam1") or next(iter(cameras_status.values()), None)
+    gpio = get_gpio_controller()
+    cuda_info = check_cuda_availability()
+    
+    return {
+        "camera": {
+            "is_open": bool(legacy_camera.get("is_open")) if legacy_camera else False,
+            "frame_count": int(legacy_camera.get("frame_count", 0)) if legacy_camera else 0,
+            "selected_source": legacy_camera.get("selected_source") if legacy_camera else None,
+            "selected_pipeline": legacy_camera.get("selected_pipeline") if legacy_camera else None,
+            "recovery": (legacy_camera.get("recovery") if legacy_camera else {}),
         },
+        "cameras": cameras_status,
         "gpio": gpio.get_outputs_state(),
         "cuda": cuda_info,
         "websocket_connections": get_ws_manager().get_connection_count(),

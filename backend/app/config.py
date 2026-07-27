@@ -13,6 +13,24 @@ CAMERA2_HEIGHT = int(os.getenv("CAMERA2_HEIGHT", "480"))
 CAMERA2_FPS = int(os.getenv("CAMERA2_FPS", "20"))
 CAMERA_DEFAULT_ID = os.getenv("CAMERA_DEFAULT_ID", "cam1").lower()
 CAMERA2_DEVICE_HINT = os.getenv("CAMERA2_DEVICE_HINT", "arducam,ir")
+CAMERA2_FORCE_MJPEG = os.getenv("CAMERA2_FORCE_MJPEG", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+CAMERA2_PREFER_GRAY8 = os.getenv("CAMERA2_PREFER_GRAY8", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+CAMERA_ALLOW_YUY2_FALLBACK = os.getenv("CAMERA_ALLOW_YUY2_FALLBACK", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 CAMERA1_JPEG_QUALITY = max(45, min(95, int(os.getenv("CAMERA1_JPEG_QUALITY", "74"))))
 CAMERA2_JPEG_QUALITY = max(45, min(95, int(os.getenv("CAMERA2_JPEG_QUALITY", "70"))))
 CAMERA_SOURCE = os.getenv("CAMERA_SOURCE", "usb").lower()  # usb | csi
@@ -67,6 +85,27 @@ CAMERA2_EXPOSURE_STEP = max(1, int(os.getenv("CAMERA2_EXPOSURE_STEP", "20")))
 CAMERA2_GAIN_STEP = max(1, int(os.getenv("CAMERA2_GAIN_STEP", "4")))
 
 GST_APPSINK_REALTIME = "appsink drop=1 max-buffers=1 sync=false enable-last-sample=false"
+
+CAMERA2_GST_PIPELINE_MJPEG_HW_GRAY8 = (
+    f"v4l2src io-mode=2 do-timestamp=true device={CAMERA2_DEVICE} ! "
+    f"image/jpeg,width={CAMERA2_WIDTH},height={CAMERA2_HEIGHT},framerate={CAMERA2_FPS}/1 ! "
+    "jpegparse ! "
+    "nvjpegdec ! "
+    "nvvidconv ! "
+    "video/x-raw, format=GRAY8 ! "
+    "queue leaky=downstream max-size-buffers=1 ! "
+    + GST_APPSINK_REALTIME
+)
+
+CAMERA2_GST_PIPELINE_MJPEG_COMPAT_GRAY8 = (
+    f"v4l2src io-mode=2 do-timestamp=true device={CAMERA2_DEVICE} ! "
+    f"image/jpeg,width={CAMERA2_WIDTH},height={CAMERA2_HEIGHT},framerate={CAMERA2_FPS}/1 ! "
+    "jpegdec ! "
+    "videoconvert ! "
+    "video/x-raw, format=GRAY8 ! "
+    "queue leaky=downstream max-size-buffers=1 ! "
+    + GST_APPSINK_REALTIME
+)
 
 # GStreamer Pipeline Configuration
 # USB MJPEG + NVIDIA accelerated decode path (nvjpegdec + nvvidconv)

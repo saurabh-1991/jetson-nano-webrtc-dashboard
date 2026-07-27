@@ -47,6 +47,36 @@
   gap: 0.5rem;
 }
 
+.camera-status-freshness-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.camera-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.camera-subcard {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.camera-subcard-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: 0.2px;
+}
+
 .camera-primary-stats {
   display: flex;
   flex-wrap: wrap;
@@ -291,6 +321,10 @@
   }
 
   .camera-recovery-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .camera-cards-grid {
     grid-template-columns: 1fr;
   }
 

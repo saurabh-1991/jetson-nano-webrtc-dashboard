@@ -2,10 +2,12 @@ const RETENTION_MS = 2 * 60 * 1000
 const MAX_QUEUE = 400
 const FLUSH_INTERVAL_MS = 5000
 const HEARTBEAT_INTERVAL_MS = 5000
+const DUPLICATE_WINDOW_MS = 15000
 
 const queue = []
 let flushTimer = null
 let heartbeatTimer = null
+const duplicateTracker = new Map()
 
 const sessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
   ? crypto.randomUUID()
@@ -34,12 +36,38 @@ const enqueue = (event) => {
   pruneQueue()
 }
 
+const buildDuplicateKey = (event) => {
+  const metaUrl = event?.meta?.url || event?.meta?.path || ''
+  return `${event?.type || ''}|${event?.severity || ''}|${event?.message || ''}|${metaUrl}`
+}
+
+const shouldSkipDuplicate = (event) => {
+  const now = Date.now()
+  const key = buildDuplicateKey(event)
+  const lastTs = duplicateTracker.get(key)
+
+  if (typeof lastTs === 'number' && (now - lastTs) < DUPLICATE_WINDOW_MS) {
+    return true
+  }
+
+  duplicateTracker.set(key, now)
+  if (duplicateTracker.size > 1000) {
+    const staleCutoff = now - (DUPLICATE_WINDOW_MS * 2)
+    for (const [k, ts] of duplicateTracker.entries()) {
+      if (ts < staleCutoff) {
+        duplicateTracker.delete(k)
+      }
+    }
+  }
+  return false
+}
+
 const safeLogToConsole = (event) => {
   try {
     if (event.severity === 'error') {
       console.error('[event]', event.type, event.message || '', event.meta || {})
-    } else {
-      console.log('[event]', event.type, event.message || '', event.meta || {})
+    } else if (event.severity === 'warning') {
+      console.warn('[event]', event.type, event.message || '', event.meta || {})
     }
   } catch (_e) {
     // no-op
@@ -55,6 +83,11 @@ export const logFrontendEvent = (type, message = '', severity = 'info', meta = {
     at: new Date().toISOString(),
     atTs: Date.now(),
   }
+
+  if (shouldSkipDuplicate(event)) {
+    return
+  }
+
   enqueue(event)
   safeLogToConsole(event)
 }
