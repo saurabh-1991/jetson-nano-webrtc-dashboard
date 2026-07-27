@@ -21,12 +21,12 @@ That guide includes screenshots, copyable commands, and fallback steps for `.loc
 - Backend health endpoint works (`/health`).
 - Native setup script installs apt + pip dependencies successfully for JP4.6.
 - Camera endpoints are working in latest validation:
-    - `GET /api/camera/frame` returns `200` with JPEG bytes
-    - `GET /api/camera/stream` returns `200` with MJPEG stream bytes
+- `GET /api/camera/frame` returns `200` with JPEG bytes
+- `GET /api/camera/stream` returns `200` with MJPEG stream bytes
 - Remote access from another laptop on LAN is working:
-    - `http://<JETSON_IP>/`
-    - `http://<JETSON_IP>/api/camera/frame`
-    - `http://<JETSON_IP>/api/camera/stream`
+- `http://<JETSON_IP>/`
+- `http://<JETSON_IP>/api/camera/frame`
+- `http://<JETSON_IP>/api/camera/stream`
 
 ### Current caveats
 
@@ -194,9 +194,8 @@ docker system df
 
 Automation note:
 
-- `docker-compose.yml` now includes a `docker-prune` service that automatically runs:
-    - `docker image prune -f`
-    - `docker builder prune -f`
+- `docker-compose.yml` now includes a `docker-prune` service.
+- It automatically runs `docker image prune -f` and `docker builder prune -f`.
 - Default interval is every `3600` seconds.
 - To tune interval, set env before running compose:
 
@@ -520,8 +519,8 @@ docker-compose logs --tail=200 jetson-backend
 ### B) Frontend works but API fails
 
 - Verify Nginx proxy in `frontend/nginx.conf`
-    - `/api` should be plain HTTP proxy (no forced upgrade)
-    - `/ws` should keep websocket upgrade headers
+- `/api` should be plain HTTP proxy (no forced upgrade)
+- `/ws` should keep websocket upgrade headers
 
 ### C) CUDA appears unavailable
 
