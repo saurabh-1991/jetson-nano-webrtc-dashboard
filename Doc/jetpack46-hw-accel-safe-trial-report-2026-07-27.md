@@ -167,3 +167,51 @@ Conclusion:
 
 - NVIDIA GStreamer plugins are available when runtime is `nvidia`.
 - This validates the non-disruptive check path and avoids camera contention with the active production service.
+
+## Strict Trials Implemented and Executed
+
+Code-level hardening added:
+
+- `CAMERA_ENABLED_IDS` supports explicit camera enable list (for single-camera trial mode).
+- `CAMERA_STRICT_CAMERA_IDS` enforces strict request validation for disabled camera IDs.
+- `CAMERA_REQUIRE_HARDWARE_ACCEL` enforces a strict hardware-only camera startup policy.
+- Runtime diagnostics now include hardware eligibility fields: `opencv_gstreamer_enabled`, `nvjpegdec_available`, `nvvidconv_available`, and `hardware_pipeline_eligible`.
+
+### Strict trial A: camera ID enforcement (single-camera)
+
+With `CAMERA_ENABLED_IDS=cam1` and strict ID policy enabled:
+
+- `GET /api/camera/info?camera_id=cam2` returns `404` with:
+- `GET /api/camera/info?camera_id=cam2` returns `404` with `error: camera_not_enabled`, `requested_camera_id: cam2`, and `enabled_camera_ids: ["cam1"]`.
+
+Result: strict single-camera behavior is deterministic and explicit.
+
+### Strict trial B: hardware-required canary
+
+Canary launched on `:18000` using `--runtime nvidia` and:
+
+- `CAMERA_ACCELERATION=hardware`
+- `CAMERA_REQUIRE_HARDWARE_ACCEL=true`
+
+Observed diagnostics:
+
+- `nvjpegdec_available=true`
+- `nvvidconv_available=true`
+- `opencv_gstreamer_enabled=false`
+- `hardware_pipeline_eligible=false`
+
+Observed API behavior:
+
+- `GET /api/camera/info?camera_id=cam1&create_if_missing=true` => camera stays closed with explicit last error
+- `GET /api/camera/frame?camera_id=cam1` => `503 Service Unavailable`
+
+Result: strict hardware gate works as designed and avoids silent fallback.
+
+### Compose runtime compatibility note
+
+Attempted to set `runtime: nvidia` in `docker-compose.yml`, but target `docker-compose` rejected it as unsupported (`Unsupported config option ... 'runtime'`).
+
+Action taken:
+
+- Reverted `runtime` key in compose to keep deployment stable.
+- Continued NVIDIA-runtime validation using explicit canary `docker run --runtime nvidia` path.
