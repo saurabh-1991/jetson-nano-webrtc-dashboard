@@ -463,6 +463,20 @@ class CameraCapture:
             "appsink drop=1 max-buffers=1 sync=false"
         )
 
+    def _build_usb_pipeline_mjpeg_hw(self, width: int, height: int, fps: int) -> str:
+        """Build an NVIDIA hardware MJPEG pipeline bound to this camera profile."""
+        return (
+            f"v4l2src io-mode=2 do-timestamp=true device={self.camera_device} ! "
+            f"image/jpeg,width={width},height={height},framerate={fps}/1 ! "
+            "jpegparse ! "
+            "nvjpegdec ! "
+            "nvvidconv ! "
+            "video/x-raw, format=BGRx ! "
+            "videoconvert ! "
+            "video/x-raw, format=BGR ! "
+            "appsink drop=1 max-buffers=1 sync=false"
+        )
+
     def _pick_best_mode(self, modes, preferred_w, preferred_h, preferred_fps):
         """Pick nearest advertised mode using a simple distance metric."""
         if not modes:
@@ -998,14 +1012,17 @@ class CameraCapture:
 
                 # Adaptive compatibility pipelines from detected camera formats are tried first,
                 # because they are validated via gst-inspect + v4l2 mode introspection.
-                adaptive_candidates = self._build_adaptive_usb_candidates()
-                if adaptive_candidates:
-                    logger.info(
-                        "Detected USB camera modes: mjpeg=%s yuy2=%s",
-                        self.detected_usb_modes.get("mjpeg", []),
-                        self.detected_usb_modes.get("yuy2", []),
-                    )
-                    usb_candidates.extend(adaptive_candidates)
+                # In camera-specific hardware mode, skip adaptive compatibility probing to
+                # reduce startup churn and keep candidate selection deterministic.
+                if self.camera_acceleration_mode != "hardware":
+                    adaptive_candidates = self._build_adaptive_usb_candidates()
+                    if adaptive_candidates:
+                        logger.info(
+                            "Detected USB camera modes: mjpeg=%s yuy2=%s",
+                            self.detected_usb_modes.get("mjpeg", []),
+                            self.detected_usb_modes.get("yuy2", []),
+                        )
+                        usb_candidates.extend(adaptive_candidates)
 
                 hardware_candidates_allowed = self.camera_acceleration_mode in ("auto", "hardware") and self.hardware_pipeline_eligible
 
@@ -1018,6 +1035,21 @@ class CameraCapture:
                     )
 
                 if hardware_candidates_allowed:
+                    usb_candidates.append(
+                        {
+                            "source": self._build_usb_pipeline_mjpeg_hw(
+                                int(self.capture_width),
+                                int(self.capture_height),
+                                int(self.capture_fps),
+                            ),
+                            "backend": cv2.CAP_GSTREAMER,
+                            "label": (
+                                "USB hardware pipeline profile-locked "
+                                f"({self.capture_width}x{self.capture_height}@{self.capture_fps})"
+                            ),
+                            "format_key": "mjpeg",
+                        }
+                    )
                     usb_candidates.append(
                         {
                             "source": USB_GST_PIPELINE_HW,
