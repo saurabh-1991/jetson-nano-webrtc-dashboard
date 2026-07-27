@@ -383,18 +383,52 @@ class CameraCapture:
         return _discover_v4l2_devices_static()
 
     def _check_opencv_gstreamer_support(self) -> bool:
-        """Detect whether OpenCV build has GStreamer backend enabled."""
+        """Detect whether OpenCV can actually use CAP_GSTREAMER at runtime."""
+        build_flag = None
         try:
             info = cv2.getBuildInformation()
-            enabled = "gstreamer: yes" in info.lower()
-            if not enabled:
-                logger.warning(
-                    "OpenCV build reports GStreamer backend disabled; USB capture will use V4L2 fallback"
-                )
-            return enabled
+            # Handles variants like:
+            # - "GStreamer: YES"
+            # - "GStreamer:                   YES"
+            # - "GStreamer: NO"
+            match = re.search(r"gstreamer\s*:\s*(yes|no)", info, flags=re.IGNORECASE)
+            if match:
+                build_flag = match.group(1).strip().lower() == "yes"
         except Exception as e:
-            logger.warning("Unable to read OpenCV build info (%s); assuming no GStreamer", e)
-            return False
+            logger.warning("Unable to read OpenCV build info (%s); falling back to runtime probe", e)
+
+        runtime_probe_ok = False
+        cap = None
+        try:
+            # Lightweight probe for CAP_GSTREAMER in this runtime.
+            # `videotestsrc` avoids touching camera devices during capability detection.
+            probe_pipeline = (
+                "videotestsrc num-buffers=1 ! "
+                "video/x-raw,format=BGR,width=160,height=120,framerate=1/1 ! "
+                "appsink drop=1 max-buffers=1 sync=false"
+            )
+            cap = cv2.VideoCapture(probe_pipeline, cv2.CAP_GSTREAMER)
+            if cap is not None and cap.isOpened():
+                ret, frame = cap.read()
+                runtime_probe_ok = bool(ret and frame is not None)
+        except Exception:
+            runtime_probe_ok = False
+        finally:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+
+        # If build info explicitly says YES, trust it. Otherwise require a successful runtime probe.
+        enabled = bool(build_flag is True or runtime_probe_ok)
+        if not enabled:
+            logger.warning(
+                "OpenCV CAP_GSTREAMER unavailable (build_flag=%s runtime_probe_ok=%s); USB capture will use V4L2 fallback",
+                build_flag,
+                runtime_probe_ok,
+            )
+        return enabled
 
     def _build_usb_pipeline_mjpeg_compat(self, width: int, height: int, fps: int) -> str:
         """Build a software-compatible MJPEG pipeline known to work with OpenCV appsink."""
