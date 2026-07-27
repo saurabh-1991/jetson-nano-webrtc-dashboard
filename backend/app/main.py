@@ -731,7 +731,13 @@ async def get_frame(camera_id: str = CAMERA_DEFAULT_ID):
 
     return StreamingResponse(
         iter([jpeg_bytes]),
-        media_type="image/jpeg"
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -823,7 +829,14 @@ async def stream_mjpeg(request: Request):
 
     return StreamingResponse(
         generate(),
-        media_type="multipart/x-mixed-replace; boundary=frame"
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

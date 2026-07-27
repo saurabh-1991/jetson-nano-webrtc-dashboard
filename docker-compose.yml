@@ -14,8 +14,13 @@ services:
       - API_DEBUG=False
       - LOG_LEVEL=INFO
       - CAMERA_SOURCE=usb
-      - CAMERA_ACCELERATION=compat
-      - CAMERA_USB_STARTUP_PROBE=false
+      - CAMERA_ACCELERATION=auto
+      - CAMERA_USB_STARTUP_PROBE=true
+      - CAMERA1_FPS=20
+      - CAMERA2_FPS=15
+      - CAMERA_BUFFER_FLUSH_GRABS=5
+      - CAMERA1_AUTO_BRIGHTNESS=true
+      - CAMERA2_AUTO_BRIGHTNESS=true
       - CUDA_ENABLED=true
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility

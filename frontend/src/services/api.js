@@ -87,7 +87,8 @@ api.interceptors.response.use(
 
 // Camera endpoints
 export const cameraAPI = {
-  getInfo: (cameraId = 'cam1') => api.get(`/camera/info?camera_id=${encodeURIComponent(cameraId)}`),
+  getInfo: (cameraId = 'cam1', requestConfig = {}) =>
+    api.get(`/camera/info?camera_id=${encodeURIComponent(cameraId)}`, requestConfig),
   getFrame: (cameraId = 'cam1') => api.get(`/camera/frame?camera_id=${encodeURIComponent(cameraId)}`),
   getStream: (cameraId = 'cam1') => `${API_BASE}/api/camera/stream?camera_id=${encodeURIComponent(cameraId)}`,
   recover: (reason = 'manual_operator_recover', cameraId = 'cam1') =>

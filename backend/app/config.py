@@ -31,6 +31,18 @@ CAMERA_ALLOW_YUY2_FALLBACK = os.getenv("CAMERA_ALLOW_YUY2_FALLBACK", "false").lo
     "yes",
     "on",
 )
+CAMERA1_AUTO_BRIGHTNESS = os.getenv("CAMERA1_AUTO_BRIGHTNESS", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+CAMERA2_AUTO_BRIGHTNESS = os.getenv("CAMERA2_AUTO_BRIGHTNESS", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 CAMERA1_JPEG_QUALITY = max(45, min(95, int(os.getenv("CAMERA1_JPEG_QUALITY", "74"))))
 CAMERA2_JPEG_QUALITY = max(45, min(95, int(os.getenv("CAMERA2_JPEG_QUALITY", "70"))))
 CAMERA_SOURCE = os.getenv("CAMERA_SOURCE", "usb").lower()  # usb | csi
@@ -67,7 +79,7 @@ CAMERA_PROFILES = {
     },
 }
 
-CAMERA_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA_BUFFER_FLUSH_GRABS", "2")))
+CAMERA_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA_BUFFER_FLUSH_GRABS", "5")))
 
 # IR camera low-light adaptation (best-effort via V4L2 controls)
 CAMERA2_ADAPTIVE_EXPOSURE = os.getenv("CAMERA2_ADAPTIVE_EXPOSURE", "true").lower() in (

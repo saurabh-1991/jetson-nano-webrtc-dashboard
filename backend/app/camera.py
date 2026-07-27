@@ -11,6 +11,7 @@ import numpy as np
 from .config import (
     CAMERA_ALLOW_YUY2_FALLBACK,
     CAMERA_ACCELERATION,
+    CAMERA1_AUTO_BRIGHTNESS,
     CAMERA2_ADAPTIVE_EXPOSURE,
     CAMERA_DEVICE,
     CAMERA_DEFAULT_ID,
@@ -24,6 +25,7 @@ from .config import (
     CAMERA_FPS,
     CAMERA_HEIGHT,
     CAMERA2_DEVICE_HINT,
+    CAMERA2_AUTO_BRIGHTNESS,
     CAMERA2_LUMA_TARGET,
     CAMERA2_LUMA_TOLERANCE,
     CAMERA2_PREFER_GRAY8,
@@ -91,6 +93,9 @@ class CameraCapture:
         self.buffer_flush_grabs = max(0, int(CAMERA_BUFFER_FLUSH_GRABS))
         self.force_mjpeg = bool(self.camera_id == "cam2" and CAMERA2_FORCE_MJPEG)
         self.prefer_gray8 = bool(self.camera_id == "cam2" and CAMERA2_PREFER_GRAY8)
+        self.auto_brightness_enabled = bool(
+            CAMERA2_AUTO_BRIGHTNESS if self.camera_id == "cam2" else CAMERA1_AUTO_BRIGHTNESS
+        )
         self.cap = None
         self.is_open = False
         self.frame_count = 0
@@ -134,7 +139,9 @@ class CameraCapture:
         self._next_recovery_allowed_ts = 0.0
         self._last_recovery_ts = None
         self._last_recovery_reason = None
-        self._adaptive_exposure_enabled = bool(CAMERA2_ADAPTIVE_EXPOSURE and self.camera_id == "cam2")
+        self._adaptive_exposure_enabled = bool(
+            CAMERA2_ADAPTIVE_EXPOSURE and self.camera_id == "cam2" and not self.auto_brightness_enabled
+        )
         self._next_exposure_adjust_ts = 0.0
         self._last_luma_mean = None
         self._v4l2_ctrl_ranges = {}
@@ -220,6 +227,22 @@ class CameraCapture:
             if default_val is None:
                 default_val = int((ctrl["min"] + ctrl["max"]) / 3)
             self._current_gain = max(ctrl["min"], min(ctrl["max"], int(default_val)))
+
+    def _apply_auto_brightness_controls(self):
+        """Best-effort auto controls for USB webcams to keep brightness adaptive."""
+        if not self.auto_brightness_enabled:
+            return
+
+        self._set_v4l2_control("exposure_auto", 3)
+        self._set_v4l2_control("exposure_auto_priority", 0)
+        self._set_v4l2_control("white_balance_temperature_auto", 1)
+
+        # Keep gain moderate if control exists to reduce dark-scene grain spikes.
+        self._load_v4l2_control_ranges()
+        if "gain" in self._v4l2_ctrl_ranges:
+            ctrl = self._v4l2_ctrl_ranges["gain"]
+            target_gain = int((2 * ctrl["min"] + ctrl["max"]) / 3)
+            self._set_v4l2_control("gain", target_gain)
 
     def _maybe_adapt_ir_exposure(self, frame_bgr: np.ndarray):
         """Adjust exposure/gain occasionally based on frame luminance for low-light IR scene."""
@@ -833,6 +856,7 @@ class CameraCapture:
                     if cap is not None:
                         self.cap = cap
                         self.is_open = True
+                        self._apply_auto_brightness_controls()
                         logger.info("Camera initialized successfully")
                         return
 
@@ -964,6 +988,7 @@ class CameraCapture:
                 if cap is not None:
                     self.cap = cap
                     self.is_open = True
+                    self._apply_auto_brightness_controls()
                     self._apply_initial_ir_low_light_controls()
                     self.selected_pipeline = label
                     self.selected_pipeline_mode = self._infer_pipeline_mode(label)
@@ -1329,6 +1354,7 @@ class CameraCapture:
                 "next_adjust_in_seconds": max(0.0, self._next_exposure_adjust_ts - time.time()),
                 "force_mjpeg": self.force_mjpeg,
                 "prefer_gray8": self.prefer_gray8,
+                "auto_brightness_enabled": self.auto_brightness_enabled,
             },
         }
 

@@ -11,6 +11,7 @@ export const DeviceStatus = () => {
   const [isRecoveringCamera, setIsRecoveringCamera] = useState({ cam1: false, cam2: false })
   const [recoverMessage, setRecoverMessage] = useState({ cam1: '', cam2: '' })
   const [error, setError] = useState(null)
+  const [isCameraRefreshing, setIsCameraRefreshing] = useState(false)
 
   const fetchStatus = async () => {
     try {
@@ -30,8 +31,8 @@ export const DeviceStatus = () => {
   const fetchCameras = async () => {
     try {
       const [cam1Response, cam2Response] = await Promise.allSettled([
-        cameraAPI.getInfo('cam1'),
-        cameraAPI.getInfo('cam2'),
+        cameraAPI.getInfo('cam1', { timeout: 1800 }),
+        cameraAPI.getInfo('cam2', { timeout: 1800 }),
       ])
 
       setCameras((prev) => ({
@@ -48,16 +49,45 @@ export const DeviceStatus = () => {
   }
 
   useEffect(() => {
-    // Fetch immediately and then refresh.
-    fetchStatus()
-    fetchCameras()
+    let mounted = true
+    let statusTimer = null
+    let cameraTimer = null
+    let statusInFlight = false
+    let cameraInFlight = false
 
-    const statusInterval = setInterval(fetchStatus, 5000)
-    const cameraInterval = setInterval(fetchCameras, 1500)
+    const scheduleStatus = (delayMs = 3000) => {
+      if (!mounted) return
+      statusTimer = setTimeout(async () => {
+        if (!statusInFlight) {
+          statusInFlight = true
+          await fetchStatus()
+          statusInFlight = false
+        }
+        scheduleStatus(5000)
+      }, delayMs)
+    }
+
+    const scheduleCamera = (delayMs = 1200) => {
+      if (!mounted) return
+      cameraTimer = setTimeout(async () => {
+        if (!cameraInFlight) {
+          cameraInFlight = true
+          setIsCameraRefreshing(true)
+          await fetchCameras()
+          setIsCameraRefreshing(false)
+          cameraInFlight = false
+        }
+        scheduleCamera(1800)
+      }, delayMs)
+    }
+
+    scheduleStatus(0)
+    scheduleCamera(0)
 
     return () => {
-      clearInterval(statusInterval)
-      clearInterval(cameraInterval)
+      mounted = false
+      if (statusTimer) clearTimeout(statusTimer)
+      if (cameraTimer) clearTimeout(cameraTimer)
     }
   }, [])
 
@@ -122,7 +152,7 @@ export const DeviceStatus = () => {
           <div className="card-title">Cameras</div>
           <div className="camera-status-freshness-row">
             <span className={`refresh-indicator ${isRefreshing ? 'active' : ''}`}>
-              {isRefreshing ? 'Refreshing…' : 'Auto-refresh'}
+              {(isRefreshing || isCameraRefreshing) ? 'Refreshing…' : 'Auto-refresh'}
             </span>
             <span className={`health-badge ${cameraStatusFresh ? 'healthy' : 'warning'}`}>
               {cameraStatusFresh ? 'Live' : 'Delayed'}

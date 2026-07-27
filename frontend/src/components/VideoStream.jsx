@@ -29,6 +29,9 @@ export const VideoStream = ({
   const fallbackActiveRef = useRef(false)
   const mjpegRetryTimerRef = useRef(null)
   const mjpegRetryCountRef = useRef(0)
+  const statsPollTimerRef = useRef(null)
+  const statsPollInFlightRef = useRef(false)
+  const isConnectedRef = useRef(false)
 
   const getBaseUrl = () => apiBaseUrl || (
     import.meta.env.DEV
@@ -50,6 +53,13 @@ export const VideoStream = ({
     if (mjpegRetryTimerRef.current) {
       clearTimeout(mjpegRetryTimerRef.current)
       mjpegRetryTimerRef.current = null
+    }
+  }
+
+  const clearStatsPollTimer = () => {
+    if (statsPollTimerRef.current) {
+      clearTimeout(statsPollTimerRef.current)
+      statsPollTimerRef.current = null
     }
   }
 
@@ -368,10 +378,14 @@ export const VideoStream = ({
   }
 
   const pollLiveStats = async () => {
+    if (statsPollInFlightRef.current) {
+      return
+    }
+    statsPollInFlightRef.current = true
     try {
       const baseUrl = getBaseUrl()
       const response = await fetch(`${baseUrl}/api/stats`, {
-        cache: 'no-store'
+        cache: 'no-store',
       })
       if (!response.ok) {
         throw new Error(`stats ${response.status}`)
@@ -383,17 +397,30 @@ export const VideoStream = ({
       setStatsError(false)
     } catch (err) {
       setStatsError(true)
+    } finally {
+      statsPollInFlightRef.current = false
     }
   }
 
+  const scheduleStatsPoll = (delayMs = 3000) => {
+    clearStatsPollTimer()
+    statsPollTimerRef.current = setTimeout(async () => {
+      await pollLiveStats()
+      const nextDelay = isConnectedRef.current ? 2500 : 4500
+      scheduleStatsPoll(nextDelay)
+    }, delayMs)
+  }
+
+  useEffect(() => {
+    isConnectedRef.current = isConnected
+  }, [isConnected])
+
   useEffect(() => {
     pollLiveStats()
-    const timer = setInterval(() => {
-      pollLiveStats()
-    }, 2000)
+    scheduleStatsPoll(2200)
 
     return () => {
-      clearInterval(timer)
+      clearStatsPollTimer()
       clearMjpegRetryTimer()
       disconnect()
     }
