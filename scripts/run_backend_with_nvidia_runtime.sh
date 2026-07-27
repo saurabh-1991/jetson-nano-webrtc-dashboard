@@ -69,4 +69,29 @@ echo "[nvidia-runtime] Health + camera availability:"
 curl -sS http://127.0.0.1:8000/health ; echo
 curl -sS http://127.0.0.1:8000/api/camera/enabled ; echo
 
+warmup_frame_check() {
+  local camera_id="$1"
+  local max_attempts="${2:-6}"
+  local attempt=1
+  local http_code=""
+
+  while [ "$attempt" -le "$max_attempts" ]; do
+    http_code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:8000/api/camera/frame?camera_id=${camera_id}") || http_code="000"
+    if [ "$http_code" = "200" ]; then
+      echo "[nvidia-runtime] ${camera_id} frame warm-up: OK on attempt ${attempt}"
+      return 0
+    fi
+    echo "[nvidia-runtime] ${camera_id} frame warm-up: attempt ${attempt}/${max_attempts} returned HTTP ${http_code}"
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+
+  echo "[nvidia-runtime] ERROR: ${camera_id} frame warm-up failed after ${max_attempts} attempts"
+  return 1
+}
+
+echo "[nvidia-runtime] Camera frame warm-up checks:"
+warmup_frame_check cam1 4
+warmup_frame_check cam2 6
+
 echo "[nvidia-runtime] Done."
