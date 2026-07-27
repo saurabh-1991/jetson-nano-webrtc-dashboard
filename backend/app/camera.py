@@ -950,13 +950,16 @@ class CameraCapture:
             self.startup_probe_scores = {}
             self.startup_probe_order = []
 
-            fallback_sources = [
-                (
-                    self._apply_device_profile_to_pipeline(GST_PIPELINE),
-                    cv2.CAP_GSTREAMER,
-                    "configured GStreamer pipeline",
-                ),
-            ]
+            fallback_sources = []
+
+            if not (CAMERA_SOURCE == "usb" and self.camera_acceleration_mode == "hardware"):
+                fallback_sources.append(
+                    (
+                        self._apply_device_profile_to_pipeline(GST_PIPELINE),
+                        cv2.CAP_GSTREAMER,
+                        "configured GStreamer pipeline",
+                    )
+                )
 
             if CAMERA_SOURCE == "usb" and not GST_PIPELINE_IS_OVERRIDE:
                 logger.info("USB camera acceleration mode: %s (camera=%s)", self.camera_acceleration_mode, self.camera_id)
