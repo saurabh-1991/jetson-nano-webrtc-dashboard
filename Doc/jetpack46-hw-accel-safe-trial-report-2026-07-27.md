@@ -215,3 +215,23 @@ Action taken:
 
 - Reverted `runtime` key in compose to keep deployment stable.
 - Continued NVIDIA-runtime validation using explicit canary `docker run --runtime nvidia` path.
+
+## Next-step rollout hardening (completed)
+
+To make strict single-camera trials operationally clean, frontend/backend camera discovery was hardened:
+
+- Added backend endpoint: `GET /api/camera/enabled`
+- Dashboard now renders camera panels dynamically from enabled-camera metadata.
+- Device status camera polling now follows backend-reported camera IDs.
+- Stream connect path performs a camera preflight and surfaces disabled-camera errors without retry storms.
+- Dashboard defaults to `cam1` until enabled-camera metadata is loaded, preventing transient `cam2` polling on startup.
+
+Validation evidence (live target):
+
+- `GET /api/camera/enabled` => `{"enabled_camera_ids":["cam1"], ...}`
+- Browser snapshot after refresh showed only `Camera 1 (Main)` tile.
+- Backend request logs over the verification window showed repeated `cam1` info requests and no `cam2` info polling.
+
+Result:
+
+- Strict single-camera mode is now both **enforced** and **quiet** (no disabled-camera poll noise).
