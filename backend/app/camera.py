@@ -11,8 +11,12 @@ import numpy as np
 from .config import (
     CAMERA_ALLOW_YUY2_FALLBACK,
     CAMERA_ACCELERATION,
+    CAMERA1_ACCELERATION,
     CAMERA1_AUTO_BRIGHTNESS,
+    CAMERA1_USB_STARTUP_PROBE,
+    CAMERA2_ACCELERATION,
     CAMERA2_ADAPTIVE_EXPOSURE,
+    CAMERA2_USB_STARTUP_PROBE,
     CAMERA_DEVICE,
     CAMERA_DEFAULT_ID,
     CAMERA_REQUIRE_HARDWARE_ACCEL,
@@ -139,6 +143,14 @@ class CameraCapture:
         self.selected_pipeline_source = None
         self.selected_pipeline_backend = None
         self.startup_probe_enabled = CAMERA_USB_STARTUP_PROBE
+        if self.camera_id == "cam1" and CAMERA1_USB_STARTUP_PROBE is not None:
+            self.startup_probe_enabled = bool(CAMERA1_USB_STARTUP_PROBE)
+        if self.camera_id == "cam2" and CAMERA2_USB_STARTUP_PROBE is not None:
+            self.startup_probe_enabled = bool(CAMERA2_USB_STARTUP_PROBE)
+        camera_accel_override = CAMERA1_ACCELERATION if self.camera_id == "cam1" else CAMERA2_ACCELERATION
+        self.camera_acceleration_mode = str(camera_accel_override or CAMERA_ACCELERATION or "auto").lower()
+        if self.camera_acceleration_mode not in ("auto", "hardware", "compat", "direct"):
+            self.camera_acceleration_mode = "auto"
         self.startup_probe_formats = {}
         self.startup_probe_scores = {}
         self.startup_probe_order = []
@@ -817,7 +829,7 @@ class CameraCapture:
 
     def _reorder_usb_candidates_with_probe(self, candidates: list) -> list:
         """Reorder USB candidates using format hints and quick runtime probing."""
-        if not CAMERA_USB_STARTUP_PROBE or not candidates:
+        if not self.startup_probe_enabled or not candidates:
             return candidates
 
         # Cam1 on Jetson Nano has shown transient open failures after repeated
@@ -933,7 +945,10 @@ class CameraCapture:
             ]
 
             if CAMERA_SOURCE == "usb" and not GST_PIPELINE_IS_OVERRIDE:
-                logger.info("USB camera acceleration mode: %s", CAMERA_ACCELERATION)
+                logger.info("USB camera acceleration mode: %s (camera=%s)", self.camera_acceleration_mode, self.camera_id)
+
+                if self.camera_acceleration_mode == "direct":
+                    fallback_sources = []
 
                 if CAMERA_REQUIRE_HARDWARE_ACCEL and not self.hardware_pipeline_eligible:
                     self.last_camera_error = (
@@ -992,9 +1007,9 @@ class CameraCapture:
                     )
                     usb_candidates.extend(adaptive_candidates)
 
-                hardware_candidates_allowed = CAMERA_ACCELERATION in ("auto", "hardware") and self.hardware_pipeline_eligible
+                hardware_candidates_allowed = self.camera_acceleration_mode in ("auto", "hardware") and self.hardware_pipeline_eligible
 
-                if CAMERA_ACCELERATION in ("auto", "hardware") and not self.hardware_pipeline_eligible:
+                if self.camera_acceleration_mode in ("auto", "hardware") and not self.hardware_pipeline_eligible:
                     logger.warning(
                         "Skipping hardware pipelines (opencv_gstreamer_enabled=%s, nvjpegdec=%s, nvvidconv=%s)",
                         self.opencv_gstreamer_enabled,
@@ -1029,7 +1044,7 @@ class CameraCapture:
                             }
                         )
 
-                if CAMERA_ACCELERATION in ("auto", "compat") and not CAMERA_REQUIRE_HARDWARE_ACCEL:
+                if self.camera_acceleration_mode in ("auto", "compat") and not CAMERA_REQUIRE_HARDWARE_ACCEL:
                     usb_candidates.append(
                         {
                             "source": USB_GST_PIPELINE_COMPAT,

@@ -2,6 +2,18 @@
 
 import os
 
+
+def _parse_optional_bool_env(var_name: str):
+    raw = os.getenv(var_name)
+    if raw is None or str(raw).strip() == "":
+        return None
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _parse_optional_camera_accel(var_name: str) -> str:
+    raw = str(os.getenv(var_name, "")).strip().lower()
+    return raw if raw in ("", "auto", "hardware", "compat", "direct") else ""
+
 # Camera Configuration
 CAMERA_DEVICE = "/dev/video0"
 CAMERA_WIDTH = 1280
@@ -60,19 +72,23 @@ CAMERA1_JPEG_QUALITY = max(45, min(95, int(os.getenv("CAMERA1_JPEG_QUALITY", "74
 CAMERA2_JPEG_QUALITY = max(45, min(95, int(os.getenv("CAMERA2_JPEG_QUALITY", "70"))))
 CAMERA_SOURCE = os.getenv("CAMERA_SOURCE", "usb").lower()  # usb | csi
 CAMERA_ACCELERATION = os.getenv("CAMERA_ACCELERATION", "auto").lower()  # auto | hardware | compat
+CAMERA1_ACCELERATION = _parse_optional_camera_accel("CAMERA1_ACCELERATION")
+CAMERA2_ACCELERATION = _parse_optional_camera_accel("CAMERA2_ACCELERATION")
 CAMERA_USB_STARTUP_PROBE = os.getenv("CAMERA_USB_STARTUP_PROBE", "true").lower() in (
     "1",
     "true",
     "yes",
     "on",
 )
+CAMERA1_USB_STARTUP_PROBE = _parse_optional_bool_env("CAMERA1_USB_STARTUP_PROBE")
+CAMERA2_USB_STARTUP_PROBE = _parse_optional_bool_env("CAMERA2_USB_STARTUP_PROBE")
 
 try:
     CAMERA_CSI_SENSOR_ID = int(os.getenv("CAMERA_CSI_SENSOR_ID", "0"))
 except (TypeError, ValueError):
     CAMERA_CSI_SENSOR_ID = 0
 
-if CAMERA_ACCELERATION not in ("auto", "hardware", "compat"):
+if CAMERA_ACCELERATION not in ("auto", "hardware", "compat", "direct"):
     CAMERA_ACCELERATION = "auto"
 
 _all_camera_profiles = {
