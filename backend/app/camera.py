@@ -1061,17 +1061,20 @@ class CameraCapture:
                     )
 
                     # Additional fallback for hosts where the active camera is not /dev/video0.
-                    discovered_devices = self._discover_v4l2_devices()
-                    for device_path in discovered_devices:
-                        if device_path == self.camera_device:
-                            continue
-                        fallback_sources.append(
-                            (
-                                device_path,
-                                None,
-                                f"V4L2 alternate device (direct) {device_path}",
+                    # In dual-camera mode, skip alternate-device probing to avoid one logical camera
+                    # stealing the other camera's dedicated /dev/videoN node.
+                    if len(CAMERA_PROFILES) <= 1:
+                        discovered_devices = self._discover_v4l2_devices()
+                        for device_path in discovered_devices:
+                            if device_path == self.camera_device:
+                                continue
+                            fallback_sources.append(
+                                (
+                                    device_path,
+                                    None,
+                                    f"V4L2 alternate device (direct) {device_path}",
+                                )
                             )
-                        )
 
             tried_sources = set()
             for source, backend, label in fallback_sources:
