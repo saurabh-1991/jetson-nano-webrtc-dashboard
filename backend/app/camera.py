@@ -820,6 +820,14 @@ class CameraCapture:
         if not CAMERA_USB_STARTUP_PROBE or not candidates:
             return candidates
 
+        # Cam1 on Jetson Nano has shown transient open failures after repeated
+        # startup probe opens/closes across multiple candidate pipelines.
+        # Keep the declared candidate order for cam1 to reduce churn.
+        if self.camera_id == "cam1":
+            self.startup_probe_order = [item.get("label") for item in candidates]
+            logger.info("Skipping USB startup probe for cam1 to reduce open/close churn")
+            return candidates
+
         supported_formats = self._detect_usb_supported_formats()
 
         supported_candidates = []
