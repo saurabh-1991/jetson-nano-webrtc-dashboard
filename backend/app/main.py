@@ -179,7 +179,7 @@ async def camera_idle_watchdog():
 
             camera_ids = get_camera_ids()
             for camera_id in camera_ids:
-                camera = get_camera(camera_id)
+                camera = get_camera(camera_id, create_if_missing=False)
                 if camera is None:
                     continue
 
@@ -205,6 +205,18 @@ async def camera_idle_watchdog():
             raise
         except Exception as e:
             logger.warning(f"Camera idle watchdog error: {e}")
+
+
+def _get_or_recover_camera(camera_id: str):
+    """Get camera instance and attempt one-shot recovery when closed."""
+    camera = get_camera(camera_id)
+    if camera is not None and camera.is_open:
+        return camera
+
+    # One-shot force refresh if the existing instance is closed.
+    release_camera(camera_id)
+    camera = get_camera(camera_id)
+    return camera
 
 
 async def safety_watchdog_loop():
@@ -761,7 +773,7 @@ async def recover_camera(request: dict = None):
 async def get_frame(camera_id: str = CAMERA_DEFAULT_ID):
     """Get single frame as JPEG"""
     camera_id = _resolve_camera_id(camera_id)
-    camera = get_camera(camera_id)
+    camera = _get_or_recover_camera(camera_id)
     if not camera.is_open:
         raise HTTPException(
             status_code=503,
@@ -788,7 +800,7 @@ async def get_frame(camera_id: str = CAMERA_DEFAULT_ID):
 async def stream_mjpeg(request: Request):
     """Stream video as MJPEG (fallback for low-latency needs)"""
     camera_id = _resolve_camera_id(request.query_params.get("camera_id") or CAMERA_DEFAULT_ID)
-    startup_camera = get_camera(camera_id)
+    startup_camera = _get_or_recover_camera(camera_id)
     if not startup_camera.is_open:
         raise HTTPException(
             status_code=503,
