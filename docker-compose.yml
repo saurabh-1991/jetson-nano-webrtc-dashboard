@@ -14,6 +14,7 @@ services:
       - API_DEBUG=False
       - LOG_LEVEL=INFO
       - CAMERA_SOURCE=usb
+      - CAMERA_ENABLED_IDS=cam1
       - CAMERA_ACCELERATION=auto
       - CAMERA_USB_STARTUP_PROBE=true
       - CAMERA1_FPS=20

@@ -12,6 +12,7 @@ CAMERA2_WIDTH = int(os.getenv("CAMERA2_WIDTH", "640"))
 CAMERA2_HEIGHT = int(os.getenv("CAMERA2_HEIGHT", "480"))
 CAMERA2_FPS = int(os.getenv("CAMERA2_FPS", "20"))
 CAMERA_DEFAULT_ID = os.getenv("CAMERA_DEFAULT_ID", "cam1").lower()
+CAMERA_ENABLED_IDS_RAW = os.getenv("CAMERA_ENABLED_IDS", "cam1,cam2")
 CAMERA2_DEVICE_HINT = os.getenv("CAMERA2_DEVICE_HINT", "arducam,ir")
 CAMERA2_FORCE_MJPEG = os.getenv("CAMERA2_FORCE_MJPEG", "true").lower() in (
     "1",
@@ -62,7 +63,7 @@ except (TypeError, ValueError):
 if CAMERA_ACCELERATION not in ("auto", "hardware", "compat"):
     CAMERA_ACCELERATION = "auto"
 
-CAMERA_PROFILES = {
+_all_camera_profiles = {
     "cam1": {
         "device": os.getenv("CAMERA1_DEVICE", CAMERA_DEVICE),
         "width": int(os.getenv("CAMERA1_WIDTH", str(CAMERA_WIDTH))),
@@ -78,6 +79,18 @@ CAMERA_PROFILES = {
         "jpeg_quality": CAMERA2_JPEG_QUALITY,
     },
 }
+
+_enabled_ids = []
+for _raw_id in str(CAMERA_ENABLED_IDS_RAW or "").split(","):
+    _camera_id = _raw_id.strip().lower()
+    if _camera_id and _camera_id in _all_camera_profiles and _camera_id not in _enabled_ids:
+        _enabled_ids.append(_camera_id)
+
+# Always keep at least cam1 enabled as a safe default.
+if not _enabled_ids:
+    _enabled_ids = ["cam1"]
+
+CAMERA_PROFILES = {camera_id: _all_camera_profiles[camera_id] for camera_id in _enabled_ids}
 
 CAMERA_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA_BUFFER_FLUSH_GRABS", "5")))
 
