@@ -149,7 +149,7 @@ def get_device_status() -> dict:
         camera_ids = ["cam1"]
 
     for camera_id in camera_ids:
-        camera = camera_module.get_camera(camera_id)
+        camera = camera_module.get_existing_camera(camera_id)
         diagnostics = camera.get_runtime_diagnostics() if camera else {}
         recovery = diagnostics.get("recovery", {}) if diagnostics else {}
         selected_source = diagnostics.get("selected_pipeline_source") if diagnostics else None

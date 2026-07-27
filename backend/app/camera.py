@@ -1377,13 +1377,20 @@ def get_camera_profile(camera_id: str) -> dict:
     return CAMERA_PROFILES.get("cam1", {"device": CAMERA_DEVICE, "width": CAMERA_WIDTH, "height": CAMERA_HEIGHT, "fps": CAMERA_FPS})
 
 
-def get_camera(camera_id: str = None) -> CameraCapture:
+def get_camera(camera_id: str = None, create_if_missing: bool = True) -> CameraCapture:
     """Get or create a camera instance by logical camera id."""
     global cameras
     camera_key = (camera_id or CAMERA_DEFAULT_ID or "cam1").lower()
     if camera_key not in cameras or cameras[camera_key] is None:
+        if not create_if_missing:
+            return None
         cameras[camera_key] = CameraCapture(camera_id=camera_key, profile=get_camera_profile(camera_key))
     return cameras[camera_key]
+
+
+def get_existing_camera(camera_id: str = None):
+    """Return camera instance only if already initialized; never creates one."""
+    return get_camera(camera_id=camera_id, create_if_missing=False)
 
 
 def get_camera_ids() -> list:

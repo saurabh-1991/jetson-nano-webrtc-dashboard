@@ -396,7 +396,7 @@ async def health():
     """Detailed health check"""
     cameras_health = {}
     for camera_id in get_camera_ids():
-        camera = get_camera(camera_id)
+        camera = get_camera(camera_id, create_if_missing=False)
         cameras_health[camera_id] = {
             "is_open": camera.is_open if camera else False,
             "frame_count": camera.get_frame_count() if camera else 0,
@@ -564,10 +564,10 @@ async def sensors_simulation_set(payload: dict):
 # ==================== CAMERA ENDPOINTS ====================
 
 @app.get("/api/camera/info")
-async def camera_info(camera_id: str = CAMERA_DEFAULT_ID):
+async def camera_info(camera_id: str = CAMERA_DEFAULT_ID, create_if_missing: bool = False):
     """Get camera information"""
     camera_id = _resolve_camera_id(camera_id)
-    camera = get_camera(camera_id)
+    camera = get_camera(camera_id, create_if_missing=bool(create_if_missing))
     pipeline_info = camera.get_runtime_diagnostics() if camera else {}
 
     return {
@@ -1040,7 +1040,7 @@ async def get_stats():
     per_camera = {}
     total_mjpeg = 0
     for camera_id in get_camera_ids():
-        cam = get_camera(camera_id)
+        cam = get_camera(camera_id, create_if_missing=False)
         async with active_mjpeg_lock:
             _ensure_camera_session_bucket(camera_id)
             mjpeg_clients = len(active_mjpeg_sessions[camera_id])
@@ -1051,7 +1051,7 @@ async def get_stats():
             "active_mjpeg_clients": mjpeg_clients,
         }
 
-    default_camera = get_camera(_resolve_camera_id(CAMERA_DEFAULT_ID))
+    default_camera = get_camera(_resolve_camera_id(CAMERA_DEFAULT_ID), create_if_missing=False)
     webrtc_connections = 0
     if is_webrtc_available():
         try:

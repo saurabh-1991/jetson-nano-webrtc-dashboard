@@ -32,6 +32,7 @@ export const VideoStream = ({
   const statsPollTimerRef = useRef(null)
   const statsPollInFlightRef = useRef(false)
   const isConnectedRef = useRef(false)
+  const isConnectingRef = useRef(false)
 
   const getBaseUrl = () => apiBaseUrl || (
     import.meta.env.DEV
@@ -405,8 +406,10 @@ export const VideoStream = ({
   const scheduleStatsPoll = (delayMs = 3000) => {
     clearStatsPollTimer()
     statsPollTimerRef.current = setTimeout(async () => {
-      await pollLiveStats()
-      const nextDelay = isConnectedRef.current ? 2500 : 4500
+      if (isConnectedRef.current || isConnectingRef.current) {
+        await pollLiveStats()
+      }
+      const nextDelay = isConnectedRef.current ? 2500 : 9000
       scheduleStatsPoll(nextDelay)
     }, delayMs)
   }
@@ -414,6 +417,10 @@ export const VideoStream = ({
   useEffect(() => {
     isConnectedRef.current = isConnected
   }, [isConnected])
+
+  useEffect(() => {
+    isConnectingRef.current = isConnecting
+  }, [isConnecting])
 
   useEffect(() => {
     pollLiveStats()
