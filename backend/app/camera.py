@@ -1104,6 +1104,20 @@ class CameraCapture:
                     logger.info("Camera initialized successfully")
                     return
 
+            if CAMERA_SOURCE == "usb" and not CAMERA_REQUIRE_HARDWARE_ACCEL:
+                cap = self._open_v4l2_with_preferred_format()
+                if cap is not None:
+                    self.cap = cap
+                    self.is_open = True
+                    self._apply_auto_brightness_controls()
+                    self._apply_initial_ir_low_light_controls()
+                    self.selected_pipeline = "V4L2 direct preferred format fallback"
+                    self.selected_pipeline_mode = "compat"
+                    self.selected_pipeline_source = self.camera_device
+                    self.selected_pipeline_backend = None
+                    logger.info("Camera initialized successfully")
+                    return
+
             logger.error("Failed to initialize camera")
             self.last_camera_error = "Failed to initialize camera from all configured sources"
 
