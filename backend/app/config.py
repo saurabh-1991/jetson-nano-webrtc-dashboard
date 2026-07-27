@@ -13,6 +13,18 @@ CAMERA2_HEIGHT = int(os.getenv("CAMERA2_HEIGHT", "480"))
 CAMERA2_FPS = int(os.getenv("CAMERA2_FPS", "20"))
 CAMERA_DEFAULT_ID = os.getenv("CAMERA_DEFAULT_ID", "cam1").lower()
 CAMERA_ENABLED_IDS_RAW = os.getenv("CAMERA_ENABLED_IDS", "cam1,cam2")
+CAMERA_STRICT_CAMERA_IDS = os.getenv("CAMERA_STRICT_CAMERA_IDS", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+CAMERA_REQUIRE_HARDWARE_ACCEL = os.getenv("CAMERA_REQUIRE_HARDWARE_ACCEL", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 CAMERA2_DEVICE_HINT = os.getenv("CAMERA2_DEVICE_HINT", "arducam,ir")
 CAMERA2_FORCE_MJPEG = os.getenv("CAMERA2_FORCE_MJPEG", "true").lower() in (
     "1",

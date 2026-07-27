@@ -15,6 +15,7 @@ from .config import (
     CAMERA2_ADAPTIVE_EXPOSURE,
     CAMERA_DEVICE,
     CAMERA_DEFAULT_ID,
+    CAMERA_REQUIRE_HARDWARE_ACCEL,
     CAMERA_BUFFER_FLUSH_GRABS,
     CAMERA2_EXPOSURE_ADAPT_INTERVAL_SECONDS,
     CAMERA2_EXPOSURE_STEP,
@@ -46,6 +47,34 @@ from .config import (
 )
 
 logger = logging.getLogger(__name__)
+
+_gst_element_probe_cache = {}
+
+
+def _gst_element_available(element_name: str) -> bool:
+    """Check whether a GStreamer element is available in current runtime."""
+    key = str(element_name or "").strip()
+    if not key:
+        return False
+
+    if key in _gst_element_probe_cache:
+        return _gst_element_probe_cache[key]
+
+    try:
+        result = subprocess.run(
+            ["gst-inspect-1.0", key],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=1.5,
+            check=False,
+        )
+        ok = result.returncode == 0
+    except Exception:
+        ok = False
+
+    _gst_element_probe_cache[key] = ok
+    return ok
 
 
 def _discover_v4l2_devices_static() -> list:
@@ -148,6 +177,11 @@ class CameraCapture:
         self._current_exposure_absolute = None
         self._current_gain = None
         self.opencv_gstreamer_enabled = self._check_opencv_gstreamer_support()
+        self.nvjpegdec_available = _gst_element_available("nvjpegdec")
+        self.nvvidconv_available = _gst_element_available("nvvidconv")
+        self.hardware_pipeline_eligible = bool(
+            self.opencv_gstreamer_enabled and self.nvjpegdec_available and self.nvvidconv_available
+        )
         self._detect_cuda_capability()
         self._initialize_camera()
 
@@ -851,6 +885,16 @@ class CameraCapture:
             if CAMERA_SOURCE == "usb" and not GST_PIPELINE_IS_OVERRIDE:
                 logger.info("USB camera acceleration mode: %s", CAMERA_ACCELERATION)
 
+                if CAMERA_REQUIRE_HARDWARE_ACCEL and not self.hardware_pipeline_eligible:
+                    self.last_camera_error = (
+                        "Hardware acceleration required but unavailable "
+                        f"(opencv_gstreamer_enabled={self.opencv_gstreamer_enabled}, "
+                        f"nvjpegdec={self.nvjpegdec_available}, nvvidconv={self.nvvidconv_available})"
+                    )
+                    logger.error(self.last_camera_error)
+                    self.is_open = False
+                    return
+
                 if not self.opencv_gstreamer_enabled:
                     cap = self._open_v4l2_with_preferred_format()
                     if cap is not None:
@@ -858,6 +902,13 @@ class CameraCapture:
                         self.is_open = True
                         self._apply_auto_brightness_controls()
                         logger.info("Camera initialized successfully")
+                        return
+                    if CAMERA_REQUIRE_HARDWARE_ACCEL:
+                        self.last_camera_error = (
+                            "Hardware acceleration required, but OpenCV GStreamer backend is disabled"
+                        )
+                        logger.error(self.last_camera_error)
+                        self.is_open = False
                         return
 
                 usb_candidates = []
@@ -891,7 +942,17 @@ class CameraCapture:
                     )
                     usb_candidates.extend(adaptive_candidates)
 
-                if CAMERA_ACCELERATION in ("auto", "hardware"):
+                hardware_candidates_allowed = CAMERA_ACCELERATION in ("auto", "hardware") and self.hardware_pipeline_eligible
+
+                if CAMERA_ACCELERATION in ("auto", "hardware") and not self.hardware_pipeline_eligible:
+                    logger.warning(
+                        "Skipping hardware pipelines (opencv_gstreamer_enabled=%s, nvjpegdec=%s, nvvidconv=%s)",
+                        self.opencv_gstreamer_enabled,
+                        self.nvjpegdec_available,
+                        self.nvvidconv_available,
+                    )
+
+                if hardware_candidates_allowed:
                     usb_candidates.append(
                         {
                             "source": USB_GST_PIPELINE_HW,
@@ -918,7 +979,7 @@ class CameraCapture:
                             }
                         )
 
-                if CAMERA_ACCELERATION in ("auto", "compat"):
+                if CAMERA_ACCELERATION in ("auto", "compat") and not CAMERA_REQUIRE_HARDWARE_ACCEL:
                     usb_candidates.append(
                         {
                             "source": USB_GST_PIPELINE_COMPAT,
@@ -955,27 +1016,28 @@ class CameraCapture:
                         )
                     )
 
-                # Last-resort USB fallback: direct V4L2 capture (no GStreamer pipeline string).
-                fallback_sources.append(
-                    (
-                        self.camera_device,
-                        None,
-                        "V4L2 device (direct)",
-                    )
-                )
-
-                # Additional fallback for hosts where the active camera is not /dev/video0.
-                discovered_devices = self._discover_v4l2_devices()
-                for device_path in discovered_devices:
-                    if device_path == self.camera_device:
-                        continue
+                if not CAMERA_REQUIRE_HARDWARE_ACCEL:
+                    # Last-resort USB fallback: direct V4L2 capture (no GStreamer pipeline string).
                     fallback_sources.append(
                         (
-                            device_path,
+                            self.camera_device,
                             None,
-                            f"V4L2 alternate device (direct) {device_path}",
+                            "V4L2 device (direct)",
                         )
                     )
+
+                    # Additional fallback for hosts where the active camera is not /dev/video0.
+                    discovered_devices = self._discover_v4l2_devices()
+                    for device_path in discovered_devices:
+                        if device_path == self.camera_device:
+                            continue
+                        fallback_sources.append(
+                            (
+                                device_path,
+                                None,
+                                f"V4L2 alternate device (direct) {device_path}",
+                            )
+                        )
 
             tried_sources = set()
             for source, backend, label in fallback_sources:
@@ -1326,6 +1388,13 @@ class CameraCapture:
             "selected_pipeline_mode": self.selected_pipeline_mode,
             "selected_pipeline_backend": self.selected_pipeline_backend,
             "selected_pipeline_source": source_preview,
+            "hardware_accel": {
+                "required": CAMERA_REQUIRE_HARDWARE_ACCEL,
+                "opencv_gstreamer_enabled": self.opencv_gstreamer_enabled,
+                "nvjpegdec_available": self.nvjpegdec_available,
+                "nvvidconv_available": self.nvvidconv_available,
+                "hardware_pipeline_eligible": self.hardware_pipeline_eligible,
+            },
             "detected_usb_modes": self.detected_usb_modes,
             "startup_probe_enabled": self.startup_probe_enabled,
             "startup_probe_formats": self.startup_probe_formats,

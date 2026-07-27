@@ -16,7 +16,14 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
-from .config import API_DEBUG, LOG_LEVEL, LOG_FORMAT, CAMERA_DEFAULT_ID, CAMERA_PROFILES
+from .config import (
+    API_DEBUG,
+    LOG_LEVEL,
+    LOG_FORMAT,
+    CAMERA_DEFAULT_ID,
+    CAMERA_PROFILES,
+    CAMERA_STRICT_CAMERA_IDS,
+)
 from .camera import (
     get_camera,
     check_cuda_availability,
@@ -135,10 +142,28 @@ next_event_compact_ts = 0.0
 
 def _resolve_camera_id(camera_id: str = None) -> str:
     requested = (camera_id or CAMERA_DEFAULT_ID or "cam1").lower()
-    available = set(get_camera_ids())
+    available_ids = get_camera_ids()
+    available = set(available_ids)
+
     if requested in available:
         return requested
-    return "cam1"
+
+    if camera_id and CAMERA_STRICT_CAMERA_IDS:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "camera_not_enabled",
+                "requested_camera_id": requested,
+                "enabled_camera_ids": available_ids,
+            },
+        )
+
+    if "cam1" in available:
+        return "cam1"
+    if available_ids:
+        return available_ids[0]
+
+    raise HTTPException(status_code=503, detail="No cameras are configured/enabled")
 
 
 def _ensure_camera_session_bucket(camera_id: str):
