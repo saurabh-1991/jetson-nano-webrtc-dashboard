@@ -13,7 +13,9 @@ function App() {
   const [showLogs, setShowLogs] = useState(false)
   const [softwareVersion, setSoftwareVersion] = useState('unknown')
   const [enabledCameraIds, setEnabledCameraIds] = useState(['cam1'])
-  const [activeTab, setActiveTab] = useState('dashboard')
+  const cam1Enabled = enabledCameraIds.includes('cam1')
+  const cam2Enabled = enabledCameraIds.includes('cam2')
+  const singleCameraMode = (cam1Enabled && !cam2Enabled) || (!cam1Enabled && cam2Enabled)
 
   useEffect(() => {
     let mounted = true
@@ -77,105 +79,63 @@ function App() {
       </header>
 
       <main className="app-main">
-        <div className="top-tabs">
-          <button
-            type="button"
-            className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setActiveTab('dashboard')}
-          >
-            Live Operations
-          </button>
-          <button
-            type="button"
-            className={`tab-btn ${activeTab === 'experiments' ? 'active' : ''}`}
-            onClick={() => setActiveTab('experiments')}
-          >
-            Experiment Monitor
-          </button>
+        <div className="dashboard-grid">
+          <section className={`dashboard-section camera1-panel ${singleCameraMode ? 'camera-single' : ''}`}>
+            <h2>Camera 1 (Main)</h2>
+            {cam1Enabled ? (
+              <VideoStream
+                cameraId="cam1"
+                startLabel="Start Cam 1"
+                stopLabel="Stop Cam 1"
+              />
+            ) : (
+              <div className="camera-unavailable">Cam 1 is disabled in backend configuration.</div>
+            )}
+          </section>
+
+          <section className={`dashboard-section camera2-panel ${singleCameraMode ? 'camera-single' : ''}`}>
+            <h2>Camera 2 (IR)</h2>
+            {cam2Enabled ? (
+              <VideoStream
+                cameraId="cam2"
+                startLabel="Start Cam 2"
+                stopLabel="Stop Cam 2"
+                forceMjpeg
+              />
+            ) : (
+              <div className="camera-unavailable">Cam 2 is disabled in backend configuration.</div>
+            )}
+          </section>
+
+          <section className="dashboard-section experiment-panel full-width">
+            <ExperimentControl title="Experiment Control" showHistory showPlayback />
+          </section>
+
+          {/* GPIO Controls Section */}
+          <section className="dashboard-section controls-panel">
+            <GPIOControls />
+          </section>
+
+          {/* Device Status Section */}
+          <section className="dashboard-section status-panel">
+            <DeviceStatus />
+          </section>
+
+          {/* Sensor Data + Graph Section */}
+          <section className="dashboard-section full-width">
+            <SensorDataSection />
+          </section>
         </div>
 
-        {activeTab === 'dashboard' ? (
-          <>
-            <div className="operations-cockpit-grid">
-              <section className="dashboard-section camera1-panel">
-                <h2>Camera 1 (Main)</h2>
-                {enabledCameraIds.includes('cam1') ? (
-                  <VideoStream
-                    cameraId="cam1"
-                    startLabel="Start Cam 1"
-                    stopLabel="Stop Cam 1"
-                  />
-                ) : (
-                  <div className="camera-unavailable">Cam 1 is disabled in backend configuration.</div>
-                )}
-              </section>
+        <div className="logs-toggle-row">
+          <ToggleSwitch
+            label="Show Troubleshooting Logs"
+            isOn={showLogs}
+            handleToggle={() => setShowLogs((prev) => !prev)}
+          />
+        </div>
 
-              <section className="dashboard-section camera2-panel">
-                <h2>Camera 2 (IR)</h2>
-                {enabledCameraIds.includes('cam2') ? (
-                  <VideoStream
-                    cameraId="cam2"
-                    startLabel="Start Cam 2"
-                    stopLabel="Stop Cam 2"
-                    forceMjpeg
-                  />
-                ) : (
-                  <div className="camera-unavailable">Cam 2 is disabled in backend configuration.</div>
-                )}
-              </section>
-
-              <section className="dashboard-section cockpit-experiment-rail">
-                <ExperimentControl
-                  title="Experiment Control"
-                  showHistory={false}
-                  showPlayback={false}
-                  compact
-                />
-                <button
-                  type="button"
-                  className="open-monitor-btn"
-                  onClick={() => setActiveTab('experiments')}
-                >
-                  Open Experiment Monitor
-                </button>
-              </section>
-            </div>
-
-            <div className="dashboard-grid dashboard-grid-secondary">
-
-              {/* GPIO Controls Section */}
-              <section className="dashboard-section controls-panel">
-                <GPIOControls />
-              </section>
-
-              {/* Device Status Section */}
-              <section className="dashboard-section status-panel">
-                <DeviceStatus />
-              </section>
-
-              {/* Sensor Data + Graph Section */}
-              <section className="dashboard-section full-width">
-                <SensorDataSection />
-              </section>
-            </div>
-
-            <div className="logs-toggle-row">
-              <ToggleSwitch
-                label="Show Troubleshooting Logs"
-                isOn={showLogs}
-                handleToggle={() => setShowLogs((prev) => !prev)}
-              />
-            </div>
-
-            <TroubleshootLogs enabled={showLogs} />
-          </>
-        ) : (
-          <div className="experiments-tab-layout">
-            <section className="dashboard-section experiment-panel">
-              <ExperimentControl />
-            </section>
-          </div>
-        )}
+        <TroubleshootLogs enabled={showLogs} />
       </main>
 
       <footer className="app-footer">
