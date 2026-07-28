@@ -1451,21 +1451,14 @@ async def stream_mjpeg(request: Request):
                     remaining_mjpeg_clients,
                 )
 
-            # Release camera when no active MJPEG clients and no active WebRTC clients.
-            try:
-                webrtc_connections = 0
-                if is_webrtc_available():
-                    try:
-                        webrtc_mgr = get_webrtc_manager_safe()
-                        webrtc_connections = webrtc_mgr.get_connection_count()
-                    except Exception:
-                        webrtc_connections = 0
-
-                if remaining_mjpeg_clients == 0 and webrtc_connections == 0:
-                    release_camera(camera_id)
-                    logger.info("Released camera %s after last stream client disconnected", camera_id)
-            except Exception as e:
-                logger.warning(f"Failed to release camera on stream disconnect: {e}")
+            # Do not hard-release camera immediately on disconnect. Brief browser/network
+            # reconnects can otherwise cause visible black-screen churn. Camera lifecycle
+            # is handled by explicit `/api/camera/stop` and the idle watchdog.
+            if remaining_mjpeg_clients == 0:
+                logger.info(
+                    "No active MJPEG clients for %s; keeping camera warm for fast reconnect.",
+                    camera_id,
+                )
 
     return StreamingResponse(
         generate(),
