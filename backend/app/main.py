@@ -482,6 +482,32 @@ def _get_or_recover_camera(camera_id: str):
     return camera
 
 
+def _prewarm_camera_sync(camera_id: str, attempts: int = 5, delay_seconds: float = 0.18) -> Dict[str, Any]:
+    """Best-effort warmup to reduce first-frame latency for live MJPEG clients."""
+    safe_attempts = max(1, int(attempts))
+    safe_delay = max(0.05, float(delay_seconds))
+
+    for attempt in range(1, safe_attempts + 1):
+        camera = _get_or_recover_camera(camera_id)
+        if camera is not None and camera.is_open:
+            ok, jpeg_bytes = camera.get_jpeg_frame(quality=80)
+            if ok and jpeg_bytes:
+                return {
+                    "camera_id": camera_id,
+                    "success": True,
+                    "attempt": attempt,
+                    "bytes": int(len(jpeg_bytes)),
+                }
+        time.sleep(safe_delay)
+
+    return {
+        "camera_id": camera_id,
+        "success": False,
+        "attempt": safe_attempts,
+        "bytes": 0,
+    }
+
+
 async def safety_watchdog_loop():
     """Apply fail-safe GPIO OFF when heartbeat/control path appears unhealthy."""
     global safety_reset_count, next_event_compact_ts
@@ -1292,6 +1318,38 @@ async def recover_camera(request: dict = None):
             "selected_pipeline": diagnostics.get("selected_pipeline"),
             "recovery": diagnostics.get("recovery"),
         },
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.post("/api/camera/prewarm")
+async def prewarm_cameras(request: dict = None):
+    """Prewarm selected cameras so Start Run can bring live view up faster."""
+    request = request or {}
+    requested_ids = request.get("camera_ids")
+
+    if isinstance(requested_ids, list) and requested_ids:
+        camera_ids = []
+        for item in requested_ids:
+            try:
+                resolved = _resolve_camera_id(str(item))
+            except Exception:
+                continue
+            if resolved not in camera_ids:
+                camera_ids.append(resolved)
+    else:
+        camera_ids = list(get_camera_ids() or [_resolve_camera_id(CAMERA_DEFAULT_ID)])
+
+    results = []
+    started_at = time.time()
+    for camera_id in camera_ids:
+        result = await run_in_threadpool(_prewarm_camera_sync, camera_id)
+        results.append(result)
+
+    return {
+        "ok": all(bool(item.get("success")) for item in results) if results else False,
+        "results": results,
+        "duration_ms": round((time.time() - started_at) * 1000.0, 2),
         "timestamp": datetime.now().isoformat(),
     }
 

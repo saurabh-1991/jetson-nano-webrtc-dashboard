@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { experimentsAPI } from '../services/api'
+import { cameraAPI, experimentsAPI } from '../services/api'
 import './ExperimentControl.css'
 
 const EXPERIMENT_REQUEST_TIMEOUT_MS = 9000
@@ -272,6 +272,10 @@ export const ExperimentControl = ({
       if (typeof onRunStarted === 'function') {
         onRunStarted()
       }
+
+      // Warm camera pipelines in background to reduce first-frame delay for
+      // Cam1/Cam2 right after Start Run.
+      cameraAPI.prewarm(['cam1', 'cam2']).catch(() => {})
 
       const tagList = String(tags || '')
         .split(',')
