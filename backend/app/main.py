@@ -1365,7 +1365,7 @@ async def get_frame(camera_id: str = CAMERA_DEFAULT_ID):
             detail="Camera is unavailable. Verify camera device mapping and try again."
         )
 
-    success, jpeg_bytes = await run_in_threadpool(camera.get_jpeg_frame, 80)
+    success, jpeg_bytes = camera.get_jpeg_frame(quality=80)
     if not success or jpeg_bytes is None:
         raise HTTPException(status_code=503, detail="Failed to capture frame from camera")
 
@@ -1416,7 +1416,7 @@ async def stream_mjpeg(request: Request):
                     logger.info("MJPEG client disconnected")
                     break
 
-                success, jpeg_bytes = await run_in_threadpool(camera.get_jpeg_frame, jpeg_quality)
+                success, jpeg_bytes = camera.get_jpeg_frame(quality=jpeg_quality)
                 if not success or jpeg_bytes is None:
                     await asyncio.sleep(0.05)
                     continue
