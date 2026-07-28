@@ -23,6 +23,7 @@ from .config import (
     EXPERIMENTS_VIDEO_CODEC,
     EXPERIMENTS_VIDEO_ENABLED,
     EXPERIMENTS_VIDEO_FPS,
+    EXPERIMENTS_VIDEO_SHARED_MEMORY_STRICT,
     EXPERIMENTS_VIDEO_SEGMENT_SECONDS,
     EXPERIMENTS_VIDEO_USE_SHARED_FRAME_CACHE,
 )
@@ -42,6 +43,42 @@ def _parse_iso_timestamp(value: str) -> float:
         return datetime.fromisoformat(normalized).timestamp()
     except Exception:
         return 0.0
+
+
+def _reconcile_stale_manifest_state(manifest: Dict[str, Any], is_runtime_active: bool):
+    """Normalize stale run manifests left in `active` state after process restart/crash.
+
+    Runtime truth is authoritative: if no in-memory active run exists for a manifest
+    still marked `active`, mark it as interrupted so UI/history do not show a phantom
+    active run forever.
+    """
+    if not isinstance(manifest, dict):
+        return manifest, False
+
+    state = str(manifest.get("state") or "").strip().lower()
+    if state != "active" or is_runtime_active:
+        return manifest, False
+
+    now_iso = _iso_utc_now()
+    started_ts = _parse_iso_timestamp(str(manifest.get("started_at") or ""))
+    stopped_ts = time.time()
+    duration_seconds = 0.0
+    if started_ts > 0:
+        duration_seconds = round(max(0.0, stopped_ts - started_ts), 3)
+
+    manifest["state"] = "interrupted"
+    manifest["updated_at"] = now_iso
+    manifest["stopped_at"] = manifest.get("stopped_at") or now_iso
+    manifest["stop_reason"] = manifest.get("stop_reason") or "backend_restarted_or_terminated"
+
+    try:
+        existing_duration = float(manifest.get("duration_seconds") or 0.0)
+    except Exception:
+        existing_duration = 0.0
+    if duration_seconds > existing_duration:
+        manifest["duration_seconds"] = duration_seconds
+
+    return manifest, True
 
 
 class ExperimentManager:
@@ -317,8 +354,13 @@ class ExperimentManager:
                 if EXPERIMENTS_VIDEO_USE_SHARED_FRAME_CACHE and hasattr(camera, "get_cached_frame"):
                     ok, frame = camera.get_cached_frame(max_age_seconds=EXPERIMENTS_VIDEO_CACHE_MAX_AGE_SECONDS)
 
-                # Fallback: pull directly at a throttled cadence only when cache is stale/missing.
-                if (not ok or frame is None) and (now_ts - last_direct_pull_ts) >= float(EXPERIMENTS_VIDEO_DIRECT_PULL_INTERVAL_SECONDS):
+                # Fallback: optionally pull directly at throttled cadence only when
+                # shared-memory strict mode is disabled.
+                if (
+                    (not ok or frame is None)
+                    and not EXPERIMENTS_VIDEO_SHARED_MEMORY_STRICT
+                    and (now_ts - last_direct_pull_ts) >= float(EXPERIMENTS_VIDEO_DIRECT_PULL_INTERVAL_SECONDS)
+                ):
                     ok, frame = camera.get_frame()
                     last_direct_pull_ts = now_ts
 
@@ -698,6 +740,17 @@ class ExperimentManager:
                     try:
                         with open(manifest_path, "r") as f:
                             manifest = json.load(f)
+
+                        reconciled, changed = _reconcile_stale_manifest_state(
+                            manifest,
+                            is_runtime_active=(str(run_id) == str(active_run_id)),
+                        )
+                        if changed:
+                            manifest = reconciled
+                            try:
+                                self._atomic_write_json(manifest_path, manifest)
+                            except Exception:
+                                pass
                     except Exception:
                         manifest = {}
 

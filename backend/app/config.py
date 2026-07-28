@@ -155,6 +155,22 @@ CAMERA_DIRECT_V4L2_TUNE = os.getenv("CAMERA_DIRECT_V4L2_TUNE", "true").lower() i
     "yes",
     "on",
 )
+CAMERA_SHARED_FRAME_PRODUCER_ENABLED = os.getenv(
+    "CAMERA_SHARED_FRAME_PRODUCER_ENABLED", "true"
+).lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+CAMERA_SHARED_FRAME_PRODUCER_IDLE_SECONDS = max(
+    1.0,
+    float(os.getenv("CAMERA_SHARED_FRAME_PRODUCER_IDLE_SECONDS", "6.0")),
+)
+CAMERA_SHARED_FRAME_WAIT_MS = max(
+    10,
+    int(os.getenv("CAMERA_SHARED_FRAME_WAIT_MS", "260")),
+)
 
 # IR camera low-light adaptation (best-effort via V4L2 controls)
 CAMERA2_ADAPTIVE_EXPOSURE = os.getenv("CAMERA2_ADAPTIVE_EXPOSURE", "true").lower() in (
@@ -342,6 +358,14 @@ EXPERIMENTS_VIDEO_FPS = max(1, int(os.getenv("EXPERIMENTS_VIDEO_FPS", "20")))
 EXPERIMENTS_VIDEO_CODEC = os.getenv("EXPERIMENTS_VIDEO_CODEC", "mp4v")
 EXPERIMENTS_VIDEO_SEGMENT_SECONDS = max(0, int(os.getenv("EXPERIMENTS_VIDEO_SEGMENT_SECONDS", "60")))
 EXPERIMENTS_VIDEO_USE_SHARED_FRAME_CACHE = os.getenv("EXPERIMENTS_VIDEO_USE_SHARED_FRAME_CACHE", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+EXPERIMENTS_VIDEO_SHARED_MEMORY_STRICT = os.getenv(
+    "EXPERIMENTS_VIDEO_SHARED_MEMORY_STRICT", "true"
+).lower() in (
     "1",
     "true",
     "yes",

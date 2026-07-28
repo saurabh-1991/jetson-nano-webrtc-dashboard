@@ -27,6 +27,9 @@ from .config import (
     CAMERA_DEVICE,
     CAMERA_DEFAULT_ID,
     CAMERA_DIRECT_V4L2_TUNE,
+    CAMERA_SHARED_FRAME_PRODUCER_ENABLED,
+    CAMERA_SHARED_FRAME_PRODUCER_IDLE_SECONDS,
+    CAMERA_SHARED_FRAME_WAIT_MS,
     CAMERA_REQUIRE_HARDWARE_ACCEL,
     CAMERA_BUFFER_FLUSH_GRABS,
     CAMERA2_EXPOSURE_ADAPT_INTERVAL_SECONDS,
@@ -190,6 +193,7 @@ class CameraCapture:
         self.last_camera_error = None
         self.detected_usb_modes = {}
         self._frame_lock = threading.Lock()
+        self._frame_ready = threading.Condition(self._frame_lock)
         self._last_frame = None
         self._last_frame_timestamp = 0.0
         self._last_jpeg_bytes = None
@@ -213,6 +217,11 @@ class CameraCapture:
         self._next_recovery_allowed_ts = 0.0
         self._last_recovery_ts = None
         self._last_recovery_reason = None
+        self._shared_producer_enabled = bool(CAMERA_SHARED_FRAME_PRODUCER_ENABLED)
+        self._shared_producer_idle_seconds = float(CAMERA_SHARED_FRAME_PRODUCER_IDLE_SECONDS)
+        self._shared_frame_wait_seconds = float(CAMERA_SHARED_FRAME_WAIT_MS) / 1000.0
+        self._producer_stop_event = threading.Event()
+        self._producer_thread = None
         self._adaptive_exposure_enabled = bool(
             CAMERA2_ADAPTIVE_EXPOSURE and self.camera_id == "cam2" and not self.auto_brightness_enabled
         )
@@ -229,6 +238,7 @@ class CameraCapture:
         )
         self._detect_cuda_capability()
         self._initialize_camera()
+        self._ensure_shared_frame_producer_started()
 
     def _set_v4l2_control(self, control_name: str, value: int) -> bool:
         try:
@@ -1482,89 +1492,31 @@ class CameraCapture:
         Returns:
             tuple: (success, frame) where frame is processed BGR image
         """
-        with self._frame_lock:
-            if not self.is_open or self.cap is None:
-                self._attempt_recovery_locked("camera_closed_on_frame_request")
-                if not self.is_open or self.cap is None:
-                    return False, None
+        self._ensure_shared_frame_producer_started()
 
-            now = time.perf_counter()
+        with self._frame_ready:
             self._last_client_access_ts = time.time()
+            self._frame_ready.notify_all()
 
-            # Share the most recent frame across concurrent consumers to avoid
-            # multiplying camera reads when multiple clients are connected.
-            if (
-                self._last_frame is not None
-                and (now - self._last_frame_timestamp) < self.frame_interval_seconds
-            ):
+            if self._is_recent_frame_locked(self.frame_interval_seconds * 1.4):
                 self._frame_cache_hits += 1
                 return True, self._last_frame.copy()
 
-            try:
-                if self.buffer_flush_grabs > 0:
-                    for _ in range(self.buffer_flush_grabs):
-                        ok = self.cap.grab()
-                        if not ok:
-                            break
+            if self._shared_producer_enabled:
+                wait_until = time.perf_counter() + float(self._shared_frame_wait_seconds)
+                while time.perf_counter() < wait_until:
+                    remaining = max(0.01, wait_until - time.perf_counter())
+                    self._frame_ready.wait(timeout=min(0.06, remaining))
+                    if self._is_recent_frame_locked(max(0.1, self.frame_interval_seconds * 1.8)):
+                        self._frame_cache_hits += 1
+                        return True, self._last_frame.copy()
 
-                ret, frame = self.cap.read()
-
-                if not ret or frame is None:
-                    self._read_failure_count += 1
-                    logger.warning(
-                        "Failed to read frame from camera (consecutive_failures=%s)",
-                        self._read_failure_count,
-                    )
-
-                    if self._read_failure_count >= self._max_consecutive_read_failures:
-                        logger.warning(
-                            "Consecutive camera frame failures reached threshold (%s). Cycling camera.",
-                            self._max_consecutive_read_failures,
-                        )
-                        if self.cap is not None:
-                            try:
-                                self.cap.release()
-                            except Exception:
-                                pass
-                        self.cap = None
-                        self.is_open = False
-                        self._last_frame = None
-                        self._last_jpeg_bytes = None
-                        self._last_jpeg_frame_count = -1
-                        self._last_frame_timestamp = 0.0
-                        self._attempt_recovery_locked("consecutive_frame_read_failures")
-
-                    return False, None
-
-                self.frame_count += 1
-                self._read_failure_count = 0
-                self._frame_cache_misses += 1
-
-                # Process frame using CUDA if available
-                if self.cuda_enabled:
-                    try:
-                        processed = self._process_with_cuda(frame)
-                    except Exception as e:
-                        logger.warning(f"CUDA processing failed: {e}, using CPU")
-                        self.cuda_enabled = False
-                        self.cuda_available = False
-                        processed = self._process_with_cpu(frame)
-                else:
-                    processed = self._process_with_cpu(frame)
-
-                self._maybe_adapt_ir_exposure(processed)
-
-                self._last_frame = processed
-                self._last_frame_timestamp = now
-                # Invalidate cached JPEG for the new frame.
-                self._last_jpeg_frame_count = -1
-                self._last_jpeg_bytes = None
-                return True, processed.copy()
-
-            except Exception as e:
-                logger.error(f"Error getting frame: {e}")
-                self.release()
-                return False, None
+            # Fallback path: perform a synchronous capture when producer has not
+            # delivered a fresh frame in time (e.g. startup or heavy transient load).
+            success, frame = self._capture_and_process_frame_locked()
+            if success and frame is not None:
+                return True, frame
+            return False, None
 
     def get_jpeg_frame(self, quality: int = 80) -> tuple:
         """Get current frame encoded as JPEG with shared cache across clients."""
@@ -1600,7 +1552,12 @@ class CameraCapture:
 
     def get_cached_frame(self, max_age_seconds: float = 0.35) -> tuple:
         """Return the latest cached frame if it's fresh enough, without reading camera again."""
-        with self._frame_lock:
+        self._ensure_shared_frame_producer_started()
+
+        with self._frame_ready:
+            self._last_client_access_ts = time.time()
+            self._frame_ready.notify_all()
+
             if self._last_frame is None:
                 return False, None
 
@@ -1673,6 +1630,7 @@ class CameraCapture:
             self._last_jpeg_bytes = None
             self._last_jpeg_frame_count = -1
             self._last_frame_timestamp = 0.0
+            self._stop_shared_frame_producer()
             logger.info(
                 "Camera auto-released after %.2fs idle (mjpeg=%s, webrtc=%s)",
                 idle_for,
@@ -1717,6 +1675,147 @@ class CameraCapture:
         """CPU frame processing fallback path."""
         return cv2.resize(frame, PROCESSING_SCALE)
 
+    def _is_recent_frame_locked(self, max_age_seconds: float) -> bool:
+        if self._last_frame is None:
+            return False
+        age_seconds = time.perf_counter() - float(self._last_frame_timestamp or 0.0)
+        return age_seconds <= float(max(0.01, max_age_seconds))
+
+    def _capture_and_process_frame_locked(self) -> tuple:
+        """Read one frame from camera, process it, and update shared cache.
+
+        Caller must hold `_frame_lock`.
+        """
+        if not self.is_open or self.cap is None:
+            self._attempt_recovery_locked("camera_closed_on_capture")
+            if not self.is_open or self.cap is None:
+                return False, None
+
+        try:
+            if self.buffer_flush_grabs > 0:
+                for _ in range(self.buffer_flush_grabs):
+                    ok = self.cap.grab()
+                    if not ok:
+                        break
+
+            ret, frame = self.cap.read()
+
+            if not ret or frame is None:
+                self._read_failure_count += 1
+                logger.warning(
+                    "Failed to read frame from camera (consecutive_failures=%s)",
+                    self._read_failure_count,
+                )
+
+                if self._read_failure_count >= self._max_consecutive_read_failures:
+                    logger.warning(
+                        "Consecutive camera frame failures reached threshold (%s). Cycling camera.",
+                        self._max_consecutive_read_failures,
+                    )
+                    if self.cap is not None:
+                        try:
+                            self.cap.release()
+                        except Exception:
+                            pass
+                    self.cap = None
+                    self.is_open = False
+                    self._last_frame = None
+                    self._last_jpeg_bytes = None
+                    self._last_jpeg_frame_count = -1
+                    self._last_frame_timestamp = 0.0
+                    self._attempt_recovery_locked("consecutive_frame_read_failures")
+
+                return False, None
+
+            self.frame_count += 1
+            self._read_failure_count = 0
+            self._frame_cache_misses += 1
+
+            if self.cuda_enabled:
+                try:
+                    processed = self._process_with_cuda(frame)
+                except Exception as e:
+                    logger.warning(f"CUDA processing failed: {e}, using CPU")
+                    self.cuda_enabled = False
+                    self.cuda_available = False
+                    processed = self._process_with_cpu(frame)
+            else:
+                processed = self._process_with_cpu(frame)
+
+            self._maybe_adapt_ir_exposure(processed)
+
+            self._last_frame = processed
+            self._last_frame_timestamp = time.perf_counter()
+            self._last_jpeg_frame_count = -1
+            self._last_jpeg_bytes = None
+            self._frame_ready.notify_all()
+            return True, processed.copy()
+
+        except Exception as e:
+            logger.error(f"Error capturing frame: {e}")
+            self.release()
+            return False, None
+
+    def _shared_frame_producer_loop(self):
+        """Continuously refresh shared frame cache while consumers are active."""
+        next_tick = time.perf_counter()
+        logger.info("Shared frame producer started (camera=%s)", self.camera_id)
+
+        while not self._producer_stop_event.is_set():
+            produced = False
+            with self._frame_ready:
+                demand_age = time.time() - float(self._last_client_access_ts)
+                has_recent_demand = demand_age <= float(self._shared_producer_idle_seconds)
+
+                if has_recent_demand:
+                    produced, _ = self._capture_and_process_frame_locked()
+                else:
+                    # Sleep until demand resumes to avoid needless device work.
+                    self._frame_ready.wait(timeout=0.25)
+
+            if not has_recent_demand:
+                continue
+
+            next_tick += self.frame_interval_seconds
+            sleep_for = next_tick - time.perf_counter()
+            if sleep_for > 0:
+                self._producer_stop_event.wait(sleep_for)
+            else:
+                # Avoid drift after prolonged capture stalls.
+                next_tick = time.perf_counter()
+
+            if not produced:
+                self._producer_stop_event.wait(0.03)
+
+        logger.info("Shared frame producer stopped (camera=%s)", self.camera_id)
+
+    def _ensure_shared_frame_producer_started(self):
+        if not self._shared_producer_enabled:
+            return
+
+        with self._frame_lock:
+            if self._producer_thread is not None and self._producer_thread.is_alive():
+                return
+
+            self._producer_stop_event.clear()
+            self._producer_thread = threading.Thread(
+                target=self._shared_frame_producer_loop,
+                name=f"camera-frame-producer-{self.camera_id}",
+                daemon=True,
+            )
+            self._producer_thread.start()
+
+    def _stop_shared_frame_producer(self):
+        self._producer_stop_event.set()
+        with self._frame_ready:
+            self._frame_ready.notify_all()
+
+        t = self._producer_thread
+        if t is not None and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=1.0)
+
+        self._producer_thread = None
+
     def get_frame_count(self) -> int:
         """Get total frames captured"""
         return self.frame_count
@@ -1730,6 +1829,8 @@ class CameraCapture:
                     self.cap = None
                 self.is_open = False
                 return
+
+            self._stop_shared_frame_producer()
 
             with self._frame_lock:
                 if self.cap is not None:
