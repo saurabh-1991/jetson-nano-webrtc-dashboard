@@ -12,7 +12,7 @@ import './App.css'
 function App() {
   const [showLogs, setShowLogs] = useState(false)
   const [softwareVersion, setSoftwareVersion] = useState('unknown')
-  const [enabledCameraIds, setEnabledCameraIds] = useState(['cam1'])
+  const [enabledCameraIds, setEnabledCameraIds] = useState(['cam1', 'cam2'])
   const [autoLiveSignal, setAutoLiveSignal] = useState(0)
   const cam1Enabled = enabledCameraIds.includes('cam1')
   const cam2Enabled = enabledCameraIds.includes('cam2')
@@ -24,6 +24,7 @@ function App() {
 
   useEffect(() => {
     let mounted = true
+    let refreshTimer = null
 
     const refreshSoftwareVersion = async () => {
       try {
@@ -59,6 +60,9 @@ function App() {
     }
 
     refreshSoftwareVersion()
+    refreshTimer = setInterval(() => {
+      refreshSoftwareVersion()
+    }, 15000)
 
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
@@ -70,6 +74,9 @@ function App() {
 
     return () => {
       mounted = false
+      if (refreshTimer) {
+        clearInterval(refreshTimer)
+      }
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [])
