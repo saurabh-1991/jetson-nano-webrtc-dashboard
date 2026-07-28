@@ -93,6 +93,7 @@ function App() {
               startLabel="Start Cam 1"
               stopLabel="Stop Cam 1"
               autoLiveSignal={autoLiveSignal}
+              autoConnectDelayMs={0}
             />
           </section>
 
@@ -105,6 +106,7 @@ function App() {
               stopLabel="Stop Cam 2"
               forceMjpeg
               autoLiveSignal={autoLiveSignal}
+              autoConnectDelayMs={650}
             />
           </section>
 

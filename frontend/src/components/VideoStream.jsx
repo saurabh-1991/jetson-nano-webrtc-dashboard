@@ -8,6 +8,7 @@ export const VideoStream = ({
   stopLabel = 'Stop Video',
   forceMjpeg = false,
   autoConnectSignal = 0,
+  autoConnectDelayMs = 0,
 }) => {
   const videoRef = useRef(null)
   const imgRef = useRef(null)
@@ -442,10 +443,17 @@ export const VideoStream = ({
       return
     }
 
-    if (!isConnectedRef.current && !isConnectingRef.current) {
-      connectStream()
+    const delayMs = Math.max(0, Number(autoConnectDelayMs) || 0)
+    const timer = setTimeout(() => {
+      if (!isConnectedRef.current && !isConnectingRef.current) {
+        connectStream()
+      }
+    }, delayMs)
+
+    return () => {
+      clearTimeout(timer)
     }
-  }, [autoConnectSignal])
+  }, [autoConnectSignal, autoConnectDelayMs])
 
   useEffect(() => {
     pollLiveStats()
@@ -465,6 +473,22 @@ export const VideoStream = ({
   const frameHitRatio = cameraPerf?.frame_cache?.hit_ratio
   const jpegHitRatio = cameraPerf?.jpeg_cache?.hit_ratio
   const avgEncodeMs = cameraPerf?.jpeg_encode?.avg_ms
+
+  useEffect(() => {
+    if (streamMode !== 'mjpeg') {
+      return
+    }
+
+    if (mjpegViewers > 0) {
+      clearMjpegRetryTimer()
+      if (typeof error === 'string' && error.startsWith('MJPEG stream load failed')) {
+        setError(null)
+      }
+      setIsConnected(true)
+      setIsConnecting(false)
+      setConnectionState('connected')
+    }
+  }, [streamMode, mjpegViewers, error])
 
   const toPct = (v) => (typeof v === 'number' ? `${Math.round(v * 100)}%` : 'NA')
   const toMs = (v) => (typeof v === 'number' ? `${v.toFixed(2)} ms` : 'NA')

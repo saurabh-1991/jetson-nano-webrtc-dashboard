@@ -27,6 +27,7 @@ export default function CameraWindow({
   stopLabel,
   forceMjpeg = false,
   autoLiveSignal = 0,
+  autoConnectDelayMs = 0,
 }) {
   const [mode, setMode] = useState('live')
   const [history, setHistory] = useState([])
@@ -176,6 +177,7 @@ export default function CameraWindow({
             stopLabel={stopLabel}
             forceMjpeg={forceMjpeg}
             autoConnectSignal={autoLiveSignal}
+            autoConnectDelayMs={autoConnectDelayMs}
           />
         ) : (
           <div className="camera-unavailable">{cameraId.toUpperCase()} is disabled in backend configuration.</div>
