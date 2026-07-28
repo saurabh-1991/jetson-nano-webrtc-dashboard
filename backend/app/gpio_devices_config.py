@@ -19,16 +19,22 @@ GPIO_OUTPUTS_DEFAULT = {
         "label": "Exhaust Blower",
         "pin": 12,
         "env": "GPIO_EXHAUST_BLOWER_PIN",
+        "active_low": True,
+        "active_low_env": "GPIO_EXHAUST_BLOWER_ACTIVE_LOW",
     },
     "air_mixer_blower": {
         "label": "Air Mixer Blower",
         "pin": 16,
         "env": "GPIO_AIR_MIXER_BLOWER_PIN",
+        "active_low": True,
+        "active_low_env": "GPIO_AIR_MIXER_BLOWER_ACTIVE_LOW",
     },
     "lpg_burner": {
         "label": "LPG Burner",
         "pin": 18,
         "env": "GPIO_LPG_BURNER_PIN",
+        "active_low": True,
+        "active_low_env": "GPIO_LPG_BURNER_ACTIVE_LOW",
     },
 }
 
@@ -83,12 +89,17 @@ def _parse_pin(name: str, default_pin: int, env_name: str) -> int:
 def get_gpio_outputs_config() -> dict:
     """Return runtime GPIO output config with env overrides applied."""
     config = {}
+    default_outputs_active_low = _parse_bool(True, "GPIO_OUTPUTS_ACTIVE_LOW")
 
     for name, item in GPIO_OUTPUTS_DEFAULT.items():
         pin = _parse_pin(name, item["pin"], item["env"])
         config[name] = {
             "label": item["label"],
             "pin": pin,
+            "active_low": _parse_bool(
+                item.get("active_low", default_outputs_active_low),
+                item.get("active_low_env", ""),
+            ),
         }
 
     _warn_pin_conflicts(config)

@@ -31,7 +31,9 @@ class GPIOController:
             try:
                 GPIO.setmode(GPIO.BOARD)
                 for output in self.outputs_config.values():
-                    GPIO.setup(output["pin"], GPIO.OUT, initial=GPIO.LOW)
+                    # Initialize to logical OFF safely while honoring active_low polarity.
+                    initial_level = GPIO.HIGH if bool(output.get("active_low", False)) else GPIO.LOW
+                    GPIO.setup(output["pin"], GPIO.OUT, initial=initial_level)
 
                 for input_cfg in self.inputs_config.values():
                     try:
@@ -60,10 +62,19 @@ class GPIOController:
                 return False
 
             pin = self.outputs_config[output_name]["pin"]
-            GPIO.output(pin, GPIO.HIGH if is_on else GPIO.LOW)
+            active_low = bool(self.outputs_config[output_name].get("active_low", False))
+            gpio_level = GPIO.LOW if (is_on and active_low) else GPIO.HIGH if (not is_on and active_low) else GPIO.HIGH if is_on else GPIO.LOW
+            GPIO.output(pin, gpio_level)
             with self._state_lock:
                 self.output_states[output_name] = bool(is_on)
-            logger.info("%s turned %s (BOARD pin %s)", output_name, "ON" if is_on else "OFF", pin)
+            logger.info(
+                "%s turned %s (BOARD pin %s, active_low=%s, gpio_level=%s)",
+                output_name,
+                "ON" if is_on else "OFF",
+                pin,
+                active_low,
+                "LOW" if gpio_level == GPIO.LOW else "HIGH",
+            )
             return True
         except Exception as e:
             logger.error("Failed to set output %s: %s", output_name, e)
@@ -102,6 +113,7 @@ class GPIOController:
                 name: {
                     "label": cfg["label"],
                     "pin": cfg["pin"],
+                    "active_low": bool(cfg.get("active_low", False)),
                     "on": self.output_states.get(name, False),
                 }
                 for name, cfg in self.outputs_config.items()
