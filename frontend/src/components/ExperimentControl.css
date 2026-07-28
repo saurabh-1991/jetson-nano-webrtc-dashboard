@@ -223,6 +223,30 @@
   color: #0f172a;
 }
 
+.history-toggle {
+  width: 100%;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0;
+  margin-bottom: 0.35rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.history-toggle h3 {
+  margin: 0;
+}
+
+.history-toggle-meta {
+  font-size: 0.8rem;
+  color: #475569;
+  font-weight: 600;
+}
+
 .active-run-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

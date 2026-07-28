@@ -82,6 +82,7 @@ export const ExperimentControl = ({
   const [operator, setOperator] = useState('')
   const [site, setSite] = useState('')
   const [tags, setTags] = useState('')
+  const [historyExpanded, setHistoryExpanded] = useState(!compact)
   const refreshInFlightRef = useRef(false)
 
   const loadData = async ({ initial = false } = {}) => {
@@ -566,70 +567,83 @@ export const ExperimentControl = ({
 
           {showHistory && (
             <div className="history-card">
-              <h3>Recent Runs</h3>
-              {history.length === 0 ? (
-                <div className="muted">No runs yet</div>
-              ) : (
-                <div className="history-table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Run ID</th>
-                        <th>Name</th>
-                        <th>State</th>
-                        <th>Duration</th>
-                        <th>Samples</th>
-                        <th>Started</th>
-                        <th>Download</th>
-                        <th>Delete</th>
-                        {showPlayback && <th>Recorded View</th>}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {history.slice(0, 8).map((item) => (
-                        <tr key={item.run_id}>
-                          <td className="mono">{item.run_id}</td>
-                          <td>{item.run_name || '--'}</td>
-                          <td>{item.state || '--'}</td>
-                          <td>{formatDuration(Number(item.duration_seconds || 0))}</td>
-                          <td>{Number(item.sample_count || 0)}</td>
-                          <td>{formatTimestamp(item.started_at)}</td>
-                          <td>
-                            <button
-                              type="button"
-                              className="download-btn"
-                              onClick={() => handleDownload(item.run_id)}
-                            >
-                              Download
-                            </button>
-                          </td>
-                          <td>
-                            <button
-                              type="button"
-                              className="download-btn delete-btn"
-                              onClick={() => handleDeleteRun(item.run_id)}
-                              disabled={deletingRunId === item.run_id || item.state === 'active' || !!active?.active && active?.run?.run_id === item.run_id}
-                            >
-                              {deletingRunId === item.run_id ? 'Deleting…' : 'Delete'}
-                            </button>
-                          </td>
-                          {showPlayback && (
+              <button
+                type="button"
+                className="history-toggle"
+                onClick={() => setHistoryExpanded((prev) => !prev)}
+                aria-expanded={historyExpanded}
+              >
+                <h3>Recent Runs</h3>
+                <span className="history-toggle-meta">
+                  {history.length} total · {historyExpanded ? 'Hide' : 'Show'}
+                </span>
+              </button>
+
+              {historyExpanded && (
+                history.length === 0 ? (
+                  <div className="muted">No runs yet</div>
+                ) : (
+                  <div className="history-table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Run ID</th>
+                          <th>Name</th>
+                          <th>State</th>
+                          <th>Duration</th>
+                          <th>Samples</th>
+                          <th>Started</th>
+                          <th>Download</th>
+                          <th>Delete</th>
+                          {showPlayback && <th>Recorded View</th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {history.slice(0, 8).map((item) => (
+                          <tr key={item.run_id}>
+                            <td className="mono">{item.run_id}</td>
+                            <td>{item.run_name || '--'}</td>
+                            <td>{item.state || '--'}</td>
+                            <td>{formatDuration(Number(item.duration_seconds || 0))}</td>
+                            <td>{Number(item.sample_count || 0)}</td>
+                            <td>{formatTimestamp(item.started_at)}</td>
                             <td>
                               <button
                                 type="button"
                                 className="download-btn"
-                                onClick={() => handlePlayback(item.run_id)}
-                                disabled={artifactLoadingRunId === item.run_id}
+                                onClick={() => handleDownload(item.run_id)}
                               >
-                                {artifactLoadingRunId === item.run_id ? 'Loading…' : 'Load'}
+                                Download
                               </button>
                             </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                            <td>
+                              <button
+                                type="button"
+                                className="download-btn delete-btn"
+                                onClick={() => handleDeleteRun(item.run_id)}
+                                disabled={deletingRunId === item.run_id || item.state === 'active' || !!active?.active && active?.run?.run_id === item.run_id}
+                              >
+                                {deletingRunId === item.run_id ? 'Deleting…' : 'Delete'}
+                              </button>
+                            </td>
+                            {showPlayback && (
+                              <td>
+                                <button
+                                  type="button"
+                                  className="download-btn"
+                                  onClick={() => handlePlayback(item.run_id)}
+                                  disabled={artifactLoadingRunId === item.run_id}
+                                >
+                                  {artifactLoadingRunId === item.run_id ? 'Loading…' : 'Load'}
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
               )}
             </div>
           )}
