@@ -74,6 +74,7 @@ export const ExperimentControl = ({
   const [isStopping, setIsStopping] = useState(false)
   const [isRunningCleanup, setIsRunningCleanup] = useState(false)
   const [deletingRunId, setDeletingRunId] = useState('')
+  const [infoMessage, setInfoMessage] = useState('')
   const [consecutiveFailures, setConsecutiveFailures] = useState(0)
   const [lastSuccessfulRefreshAt, setLastSuccessfulRefreshAt] = useState(null)
   const [error, setError] = useState(null)
@@ -212,7 +213,12 @@ export const ExperimentControl = ({
     try {
       setIsRunningCleanup(true)
       setError(null)
-      await experimentsAPI.runStorageCleanup({})
+      setInfoMessage('')
+      const response = await experimentsAPI.runStorageCleanup({})
+      const removedRuns = Number(response?.data?.storage?.removed_count || 0)
+      const reclaimedBytes = Number(response?.data?.storage?.reclaimed_bytes || 0)
+      const reclaimedMb = (reclaimedBytes / (1024 * 1024)).toFixed(2)
+      setInfoMessage(`Cleanup completed: removed ${removedRuns} run(s), reclaimed ${reclaimedMb} MB.`)
       await loadData({ initial: false })
     } catch (cleanupErr) {
       const detail = cleanupErr?.response?.data?.detail
@@ -233,7 +239,11 @@ export const ExperimentControl = ({
     try {
       setDeletingRunId(runId)
       setError(null)
-      await experimentsAPI.deleteRun(runId)
+      setInfoMessage('')
+      const response = await experimentsAPI.deleteRun(runId)
+      const reclaimedBytes = Number(response?.data?.reclaimed_bytes || 0)
+      const reclaimedMb = (reclaimedBytes / (1024 * 1024)).toFixed(2)
+      setInfoMessage(`Deleted ${runId}. Reclaimed ${reclaimedMb} MB.`)
       await loadData({ initial: false })
     } catch (deleteErr) {
       const detail = deleteErr?.response?.data?.detail
@@ -671,6 +681,7 @@ export const ExperimentControl = ({
             </div>
           )}
 
+          {infoMessage && <div className="experiment-info">{infoMessage}</div>}
           {error && <div className="experiment-error">{error}</div>}
         </>
       )}
