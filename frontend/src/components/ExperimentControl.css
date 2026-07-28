@@ -132,15 +132,33 @@
   display: flex;
   gap: 0.55rem;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .btn-run {
   border: none;
   border-radius: 8px;
-  padding: 0.5rem 0.75rem;
+  padding: 0.5rem 0.9rem;
   font-size: 0.9rem;
+  font-weight: 600;
   cursor: pointer;
   transition: transform 0.1s ease, opacity 0.2s ease;
+  min-width: 118px;
+  min-height: 42px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.experiment-control-container.compact .control-actions-row {
+  gap: 0.5rem;
+}
+
+.experiment-control-container.compact .btn-run {
+  min-width: 112px;
+  min-height: 40px;
+  font-size: 0.86rem;
 }
 
 .btn-run:disabled {
@@ -318,6 +336,11 @@
   .experiment-control-container.compact .control-form-grid,
   .experiment-control-container.compact .active-run-grid {
     grid-template-columns: 1fr;
+  }
+
+  .experiment-control-container.compact .btn-run {
+    min-width: 108px;
+    min-height: 38px;
   }
 
   .control-form-grid,
