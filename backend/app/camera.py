@@ -1793,25 +1793,17 @@ class CameraCapture:
         if not self._shared_producer_enabled:
             return
 
-        # Check if already running without lock to avoid deadlock
-        if self._producer_thread is not None and self._producer_thread.is_alive():
-            return
-
         with self._frame_lock:
-            # Double-check after acquiring lock
             if self._producer_thread is not None and self._producer_thread.is_alive():
                 return
 
             self._producer_stop_event.clear()
-            thread = threading.Thread(
+            self._producer_thread = threading.Thread(
                 target=self._shared_frame_producer_loop,
                 name=f"camera-frame-producer-{self.camera_id}",
                 daemon=True,
             )
-            self._producer_thread = thread
-
-        # Start thread OUTSIDE the lock to prevent deadlock when producer acquires _frame_ready
-        thread.start()
+            self._producer_thread.start()
 
     def _stop_shared_frame_producer(self):
         self._producer_stop_event.set()
