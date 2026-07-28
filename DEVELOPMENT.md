@@ -95,6 +95,30 @@ docker-compose logs -f jetson-backend
 docker-compose logs -f jetson-frontend
 ```
 
+## Quick frontend deploy to Jetson (no Docker rebuild)
+
+When network is flaky or Docker Hub pulls are slow, use this script to deploy only built frontend assets into the running `jetson-nano-frontend` container.
+
+From repository root on your Windows dev machine:
+
+```powershell
+./scripts/deploy_frontend_assets_quick.ps1
+```
+
+Optional parameters:
+
+```powershell
+./scripts/deploy_frontend_assets_quick.ps1 -TargetHost jetson-dashboard -DashboardBaseUrl http://192.168.1.5/
+./scripts/deploy_frontend_assets_quick.ps1 -SkipBuild
+```
+
+Expected outcome:
+
+- frontend `dist/` is built (unless `-SkipBuild`)
+- assets are copied to Jetson via SCP
+- files are swapped in `/usr/share/nginx/html` inside `jetson-nano-frontend`
+- script prints a cache-busting URL you can open immediately
+
 ## Jetson Nano (JetPack 4.6) Deployment and Validation
 
 This section is the recommended path for deploying and testing on a real Jetson Nano running JetPack 4.6 (Python 3.6 / L4T r32.7.1).
