@@ -13,9 +13,14 @@ function App() {
   const [showLogs, setShowLogs] = useState(false)
   const [softwareVersion, setSoftwareVersion] = useState('unknown')
   const [enabledCameraIds, setEnabledCameraIds] = useState(['cam1'])
+  const [autoLiveSignal, setAutoLiveSignal] = useState(0)
   const cam1Enabled = enabledCameraIds.includes('cam1')
   const cam2Enabled = enabledCameraIds.includes('cam2')
   const singleCameraMode = (cam1Enabled && !cam2Enabled) || (!cam1Enabled && cam2Enabled)
+
+  const handleRunStarted = () => {
+    setAutoLiveSignal((prev) => prev + 1)
+  }
 
   useEffect(() => {
     let mounted = true
@@ -87,6 +92,7 @@ function App() {
               enabled={cam1Enabled}
               startLabel="Start Cam 1"
               stopLabel="Stop Cam 1"
+              autoLiveSignal={autoLiveSignal}
             />
           </section>
 
@@ -98,11 +104,18 @@ function App() {
               startLabel="Start Cam 2"
               stopLabel="Stop Cam 2"
               forceMjpeg
+              autoLiveSignal={autoLiveSignal}
             />
           </section>
 
           <section className="dashboard-section experiment-panel full-width">
-            <ExperimentControl title="Experiment Control" showHistory showPlayback={false} compact />
+            <ExperimentControl
+              title="Experiment Control"
+              showHistory
+              showPlayback={false}
+              compact
+              onRunStarted={handleRunStarted}
+            />
           </section>
 
           {/* GPIO Controls Section */}

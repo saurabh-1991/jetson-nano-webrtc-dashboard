@@ -26,6 +26,7 @@ export default function CameraWindow({
   startLabel,
   stopLabel,
   forceMjpeg = false,
+  autoLiveSignal = 0,
 }) {
   const [mode, setMode] = useState('live')
   const [history, setHistory] = useState([])
@@ -70,6 +71,15 @@ export default function CameraWindow({
       loadHistory()
     }
   }, [mode])
+
+  useEffect(() => {
+    if (!autoLiveSignal || !enabled) {
+      return
+    }
+
+    setMode('live')
+    setError('')
+  }, [autoLiveSignal, enabled])
 
   const onToggleMode = (nextMode) => {
     setMode(nextMode)
@@ -165,6 +175,7 @@ export default function CameraWindow({
             startLabel={startLabel}
             stopLabel={stopLabel}
             forceMjpeg={forceMjpeg}
+            autoConnectSignal={autoLiveSignal}
           />
         ) : (
           <div className="camera-unavailable">{cameraId.toUpperCase()} is disabled in backend configuration.</div>

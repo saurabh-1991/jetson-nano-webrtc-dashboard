@@ -7,6 +7,7 @@ export const VideoStream = ({
   startLabel = 'Start Video',
   stopLabel = 'Stop Video',
   forceMjpeg = false,
+  autoConnectSignal = 0,
 }) => {
   const videoRef = useRef(null)
   const imgRef = useRef(null)
@@ -435,6 +436,16 @@ export const VideoStream = ({
   useEffect(() => {
     isConnectingRef.current = isConnecting
   }, [isConnecting])
+
+  useEffect(() => {
+    if (!autoConnectSignal) {
+      return
+    }
+
+    if (!isConnectedRef.current && !isConnectingRef.current) {
+      connectStream()
+    }
+  }, [autoConnectSignal])
 
   useEffect(() => {
     pollLiveStats()

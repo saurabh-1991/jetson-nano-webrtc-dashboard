@@ -50,6 +50,7 @@ export const ExperimentControl = ({
   showHistory = true,
   showPlayback = true,
   compact = false,
+  onRunStarted = null,
 }) => {
   const [storage, setStorage] = useState(null)
   const [storageHealth, setStorageHealth] = useState(null)
@@ -244,6 +245,10 @@ export const ExperimentControl = ({
         site: site || undefined,
         tags: tagList,
       })
+
+      if (typeof onRunStarted === 'function') {
+        onRunStarted()
+      }
 
       await loadData({ initial: false })
       setRunName('')
