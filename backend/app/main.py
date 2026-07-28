@@ -13,6 +13,7 @@ import tempfile
 import shutil
 import mimetypes
 import hashlib
+from functools import lru_cache
 from datetime import datetime
 from typing import Any, Dict, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
@@ -27,6 +28,8 @@ from .config import (
     CAMERA_DEFAULT_ID,
     CAMERA_PROFILES,
     CAMERA_STRICT_CAMERA_IDS,
+    WEBRTC_ENABLED_CAMERA_IDS,
+    WEBRTC_MAX_CONNECTIONS,
     EXPERIMENTS_CLEANUP_INTERVAL_SECONDS,
     EXPERIMENTS_LOW_WATERMARK_GB,
     EXPERIMENTS_MAX_TOTAL_GB,
@@ -55,6 +58,10 @@ from .websocket import (
 )
 
 
+WEBRTC_ENABLED_CAMERA_IDS_SET = set(WEBRTC_ENABLED_CAMERA_IDS)
+
+
+@lru_cache(maxsize=1)
 def is_webrtc_available() -> bool:
     """Check whether WebRTC dependencies are available at runtime."""
     try:
@@ -69,6 +76,19 @@ def get_webrtc_manager_safe():
     """Lazy import WebRTC manager to avoid hard startup dependency."""
     from .webrtc import get_webrtc_manager
     return get_webrtc_manager()
+
+
+def _current_webrtc_connections() -> int:
+    if not is_webrtc_available():
+        return 0
+    try:
+        return get_webrtc_manager_safe().get_connection_count()
+    except Exception:
+        return 0
+
+
+def _is_webrtc_allowed_for_camera(camera_id: str) -> bool:
+    return camera_id in WEBRTC_ENABLED_CAMERA_IDS_SET
 
 # Configure logging
 logging.basicConfig(
@@ -1174,6 +1194,13 @@ async def camera_info(camera_id: str = CAMERA_DEFAULT_ID, create_if_missing: boo
         "performance": camera.get_performance_stats() if camera else None,
         "selected_pipeline": pipeline_info.get("selected_pipeline"),
         "selected_pipeline_mode": pipeline_info.get("selected_pipeline_mode"),
+        "webrtc": {
+            "available": is_webrtc_available(),
+            "allowed_for_camera": _is_webrtc_allowed_for_camera(camera_id),
+            "enabled_camera_ids": WEBRTC_ENABLED_CAMERA_IDS,
+            "max_connections": WEBRTC_MAX_CONNECTIONS,
+            "current_connections": _current_webrtc_connections(),
+        },
         "pipeline_diagnostics": pipeline_info,
         "timestamp": datetime.now().isoformat()
     }
@@ -1343,7 +1370,26 @@ async def prewarm_cameras(request: dict = None):
     results = []
     started_at = time.time()
     for camera_id in camera_ids:
+        async with active_mjpeg_lock:
+            _ensure_camera_session_bucket(camera_id)
+            active_clients = len(active_mjpeg_sessions[camera_id])
+
+        if active_clients > 0:
+            results.append(
+                {
+                    "camera_id": camera_id,
+                    "success": True,
+                    "skipped": True,
+                    "reason": "active_mjpeg_clients",
+                    "active_mjpeg_clients": active_clients,
+                    "attempt": 0,
+                    "bytes": 0,
+                }
+            )
+            continue
+
         result = await run_in_threadpool(_prewarm_camera_sync, camera_id)
+        result["active_mjpeg_clients"] = active_clients
         results.append(result)
 
     return {
@@ -1398,6 +1444,11 @@ async def stream_mjpeg(request: Request):
         profile = CAMERA_PROFILES.get(camera_id, {})
         jpeg_quality = int(profile.get("jpeg_quality") or getattr(camera, "jpeg_quality", 80) or 80)
         frame_interval = max(0.005, 1.0 / max(1, int(getattr(camera, "target_fps", 20))))
+        consecutive_failures = 0
+        last_success_ts = time.perf_counter()
+        last_rebind_ts = 0.0
+        rebind_cooldown_seconds = 1.5
+        rebind_failure_threshold = 8
 
         async with active_mjpeg_lock:
             _ensure_camera_session_bucket(camera_id)
@@ -1418,8 +1469,33 @@ async def stream_mjpeg(request: Request):
 
                 success, jpeg_bytes = camera.get_jpeg_frame(quality=jpeg_quality)
                 if not success or jpeg_bytes is None:
+                    consecutive_failures += 1
+
+                    # Self-heal camera binding when stream has been starved for too long.
+                    now_ts = time.perf_counter()
+                    if (
+                        consecutive_failures >= rebind_failure_threshold
+                        and (now_ts - last_rebind_ts) >= rebind_cooldown_seconds
+                    ):
+                        logger.warning(
+                            "MJPEG stream recovery: rebinding camera=%s sid=%s failures=%s",
+                            camera_id,
+                            stream_session_id,
+                            consecutive_failures,
+                        )
+                        last_rebind_ts = now_ts
+                        release_camera(camera_id)
+                        camera = get_camera(camera_id)
+
+                    # Keep connection alive while recovering to reduce black-screen churn.
+                    if (now_ts - last_success_ts) > 1.0:
+                        yield b": keepalive\r\n\r\n"
+
                     await asyncio.sleep(0.05)
                     continue
+
+                consecutive_failures = 0
+                last_success_ts = time.perf_counter()
 
                 # Yield MJPEG boundary
                 yield b"--frame\r\n"
@@ -1626,6 +1702,31 @@ async def webrtc_offer(request: dict):
             detail="WebRTC is unavailable on this target build. Use /api/camera/stream (MJPEG) instead."
         )
 
+    camera_id = _resolve_camera_id((request or {}).get("camera_id") or CAMERA_DEFAULT_ID)
+    if not _is_webrtc_allowed_for_camera(camera_id):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "webrtc_disabled_for_camera",
+                "camera_id": camera_id,
+                "enabled_camera_ids": WEBRTC_ENABLED_CAMERA_IDS,
+                "message": "WebRTC disabled for this camera. Use MJPEG streaming instead.",
+            },
+        )
+
+    current_connections = _current_webrtc_connections()
+    if WEBRTC_MAX_CONNECTIONS > 0 and current_connections >= WEBRTC_MAX_CONNECTIONS:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "webrtc_capacity_reached",
+                "camera_id": camera_id,
+                "max_connections": WEBRTC_MAX_CONNECTIONS,
+                "current_connections": current_connections,
+                "message": "WebRTC capacity reached. Use MJPEG streaming or retry later.",
+            },
+        )
+
     try:
         from aiortc import RTCSessionDescription
         from .webrtc import CameraVideoTrack
@@ -1642,7 +1743,7 @@ async def webrtc_offer(request: dict):
         await pc.setRemoteDescription(offer)
 
         # Add the camera track after setting the remote description
-        pc.addTrack(CameraVideoTrack())
+        pc.addTrack(CameraVideoTrack(camera_id=camera_id))
         
         # Create answer
         answer = await pc.createAnswer()

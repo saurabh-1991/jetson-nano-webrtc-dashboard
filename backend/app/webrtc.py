@@ -17,9 +17,10 @@ logger = logging.getLogger(__name__)
 class CameraVideoTrack(VideoStreamTrack):
     """Custom video track that captures from camera"""
 
-    def __init__(self):
+    def __init__(self, camera_id: str = "cam1"):
         super().__init__()
-        self.camera = get_camera()
+        self.camera_id = (camera_id or "cam1").lower()
+        self.camera = get_camera(self.camera_id)
         self.frame_count = 0
 
     async def recv(self) -> av.VideoFrame:

@@ -23,6 +23,15 @@ def _parse_optional_v4l2_io_mode(var_name: str):
         return int(raw)
     return None
 
+
+def _parse_camera_id_list(raw: str) -> list:
+    ids = []
+    for token in str(raw or "").split(","):
+        camera_id = token.strip().lower()
+        if camera_id and camera_id not in ids:
+            ids.append(camera_id)
+    return ids
+
 # Camera Configuration
 CAMERA_DEVICE = "/dev/video0"
 CAMERA_WIDTH = 1280
@@ -148,12 +157,47 @@ if not _enabled_ids:
 
 CAMERA_PROFILES = {camera_id: _all_camera_profiles[camera_id] for camera_id in _enabled_ids}
 
+WEBRTC_ENABLED_CAMERA_IDS_RAW = os.getenv("WEBRTC_ENABLED_CAMERA_IDS", "cam1")
+_webrtc_requested_ids = _parse_camera_id_list(WEBRTC_ENABLED_CAMERA_IDS_RAW)
+if "*" in _webrtc_requested_ids:
+    WEBRTC_ENABLED_CAMERA_IDS = list(CAMERA_PROFILES.keys())
+else:
+    WEBRTC_ENABLED_CAMERA_IDS = [
+        camera_id for camera_id in _webrtc_requested_ids if camera_id in CAMERA_PROFILES
+    ]
+
+# Keep cam1 as default safe path when no valid id is provided.
+if not WEBRTC_ENABLED_CAMERA_IDS:
+    WEBRTC_ENABLED_CAMERA_IDS = [camera_id for camera_id in ("cam1",) if camera_id in CAMERA_PROFILES] or list(CAMERA_PROFILES.keys())
+
+WEBRTC_MAX_CONNECTIONS = max(0, int(os.getenv("WEBRTC_MAX_CONNECTIONS", "1")))
+
 CAMERA_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA_BUFFER_FLUSH_GRABS", "1")))
+CAMERA1_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA1_BUFFER_FLUSH_GRABS", str(CAMERA_BUFFER_FLUSH_GRABS))))
+CAMERA2_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA2_BUFFER_FLUSH_GRABS", str(max(CAMERA_BUFFER_FLUSH_GRABS, 2)))))
 CAMERA_DIRECT_V4L2_TUNE = os.getenv("CAMERA_DIRECT_V4L2_TUNE", "true").lower() in (
     "1",
     "true",
     "yes",
     "on",
+)
+CAMERA_READ_STALL_SECONDS = max(0.2, float(os.getenv("CAMERA_READ_STALL_SECONDS", "1.2")))
+CAMERA1_READ_STALL_SECONDS = max(
+    0.2,
+    float(os.getenv("CAMERA1_READ_STALL_SECONDS", str(CAMERA_READ_STALL_SECONDS))),
+)
+CAMERA2_READ_STALL_SECONDS = max(
+    0.2,
+    float(os.getenv("CAMERA2_READ_STALL_SECONDS", str(max(0.7, CAMERA_READ_STALL_SECONDS)))),
+)
+CAMERA_CONSECUTIVE_STALL_LIMIT = max(1, int(os.getenv("CAMERA_CONSECUTIVE_STALL_LIMIT", "3")))
+CAMERA1_CONSECUTIVE_STALL_LIMIT = max(
+    1,
+    int(os.getenv("CAMERA1_CONSECUTIVE_STALL_LIMIT", str(CAMERA_CONSECUTIVE_STALL_LIMIT))),
+)
+CAMERA2_CONSECUTIVE_STALL_LIMIT = max(
+    1,
+    int(os.getenv("CAMERA2_CONSECUTIVE_STALL_LIMIT", str(max(2, CAMERA_CONSECUTIVE_STALL_LIMIT)))),
 )
 
 # IR camera low-light adaptation (best-effort via V4L2 controls)
@@ -171,7 +215,16 @@ CAMERA2_LUMA_TOLERANCE = max(3.0, min(60.0, float(os.getenv("CAMERA2_LUMA_TOLERA
 CAMERA2_EXPOSURE_STEP = max(1, int(os.getenv("CAMERA2_EXPOSURE_STEP", "20")))
 CAMERA2_GAIN_STEP = max(1, int(os.getenv("CAMERA2_GAIN_STEP", "4")))
 
-GST_APPSINK_REALTIME = "appsink drop=1 max-buffers=1 sync=false enable-last-sample=false"
+GST_QUEUE_MAX_BUFFERS = max(1, int(os.getenv("GST_QUEUE_MAX_BUFFERS", "1")))
+GST_QUEUE_MAX_BYTES = max(0, int(os.getenv("GST_QUEUE_MAX_BYTES", "0")))
+GST_QUEUE_MAX_TIME_NS = max(0, int(os.getenv("GST_QUEUE_MAX_TIME_NS", "0")))
+GST_QUEUE_REALTIME = (
+    "queue leaky=downstream "
+    f"max-size-buffers={GST_QUEUE_MAX_BUFFERS} "
+    f"max-size-bytes={GST_QUEUE_MAX_BYTES} "
+    f"max-size-time={GST_QUEUE_MAX_TIME_NS}"
+)
+GST_APPSINK_REALTIME = "appsink drop=true max-buffers=1 sync=false enable-last-sample=false wait-on-eos=false"
 
 CAMERA2_GST_PIPELINE_MJPEG_HW_GRAY8 = (
     f"v4l2src io-mode=2 do-timestamp=true device={CAMERA2_DEVICE} ! "
@@ -179,8 +232,8 @@ CAMERA2_GST_PIPELINE_MJPEG_HW_GRAY8 = (
     "jpegparse ! "
     "nvjpegdec ! "
     "nvvidconv ! "
-    "video/x-raw, format=GRAY8 ! "
-    "queue leaky=downstream max-size-buffers=1 ! "
+    "video/x-raw, format=GRAY8 ! " +
+    GST_QUEUE_REALTIME + " ! "
     + GST_APPSINK_REALTIME
 )
 
@@ -189,8 +242,8 @@ CAMERA2_GST_PIPELINE_MJPEG_COMPAT_GRAY8 = (
     f"image/jpeg,width={CAMERA2_WIDTH},height={CAMERA2_HEIGHT},framerate={CAMERA2_FPS}/1 ! "
     "jpegdec ! "
     "videoconvert ! "
-    "video/x-raw, format=GRAY8 ! "
-    "queue leaky=downstream max-size-buffers=1 ! "
+    "video/x-raw, format=GRAY8 ! " +
+    GST_QUEUE_REALTIME + " ! "
     + GST_APPSINK_REALTIME
 )
 
@@ -204,8 +257,8 @@ USB_GST_PIPELINE_HW = (
     "nvvidconv ! "
     "video/x-raw, format=BGRx ! "
     "videoconvert ! "
-    "video/x-raw, format=BGR ! "
-    "queue leaky=downstream max-size-buffers=1 ! "
+    "video/x-raw, format=BGR ! " +
+    GST_QUEUE_REALTIME + " ! "
     + GST_APPSINK_REALTIME
 )
 
@@ -215,8 +268,8 @@ USB_GST_PIPELINE_COMPAT = (
     f"image/jpeg,width={CAMERA_WIDTH},height={CAMERA_HEIGHT},framerate={CAMERA_FPS}/1 ! "
     "jpegdec ! "
     "videoconvert ! "
-    "video/x-raw, format=BGR ! "
-    "queue leaky=downstream max-size-buffers=1 ! "
+    "video/x-raw, format=BGR ! " +
+    GST_QUEUE_REALTIME + " ! "
     + GST_APPSINK_REALTIME
 )
 
@@ -229,8 +282,8 @@ USB_GST_PIPELINE_RAW_HW_UYVY = (
     "nvvidconv ! "
     "video/x-raw, format=BGRx ! "
     "videoconvert ! "
-    "video/x-raw, format=BGR ! "
-    "queue leaky=downstream max-size-buffers=1 ! "
+    "video/x-raw, format=BGR ! " +
+    GST_QUEUE_REALTIME + " ! "
     + GST_APPSINK_REALTIME
 )
 
@@ -242,8 +295,8 @@ USB_GST_PIPELINE_RAW_HW_YUY2 = (
     "nvvidconv ! "
     "video/x-raw, format=BGRx ! "
     "videoconvert ! "
-    "video/x-raw, format=BGR ! "
-    "queue leaky=downstream max-size-buffers=1 ! "
+    "video/x-raw, format=BGR ! " +
+    GST_QUEUE_REALTIME + " ! "
     + GST_APPSINK_REALTIME
 )
 
@@ -251,8 +304,8 @@ USB_GST_PIPELINE_COMPAT_RAW = (
     f"v4l2src device={CAMERA_DEVICE} ! "
     f"video/x-raw,width={CAMERA_WIDTH},height={CAMERA_HEIGHT},framerate={CAMERA_FPS}/1 ! "
     "videoconvert ! "
-    "video/x-raw, format=BGR ! "
-    "queue leaky=downstream max-size-buffers=1 ! "
+    "video/x-raw, format=BGR ! " +
+    GST_QUEUE_REALTIME + " ! "
     + GST_APPSINK_REALTIME
 )
 
@@ -260,8 +313,8 @@ USB_GST_PIPELINE_COMPAT_RAW = (
 USB_GST_PIPELINE_COMPAT_ANY = (
     f"v4l2src device={CAMERA_DEVICE} ! "
     "videoconvert ! "
-    "video/x-raw, format=BGR ! "
-    "queue leaky=downstream max-size-buffers=1 ! "
+    "video/x-raw, format=BGR ! " +
+    GST_QUEUE_REALTIME + " ! "
     + GST_APPSINK_REALTIME
 )
 
@@ -271,8 +324,8 @@ CSI_GST_PIPELINE = (
     "nvvidconv ! "
     "video/x-raw, format=BGRx ! "
     "videoconvert ! "
-    "video/x-raw, format=BGR ! "
-    "queue leaky=downstream max-size-buffers=1 ! "
+    "video/x-raw, format=BGR ! " +
+    GST_QUEUE_REALTIME + " ! "
     + GST_APPSINK_REALTIME
 )
 

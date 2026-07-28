@@ -267,15 +267,12 @@ export const ExperimentControl = ({
       setIsStarting(true)
       setError(null)
 
-      // Optimistic live-start trigger: do not block camera auto-connect on
-      // backend start API latency. This keeps Cam1/Cam2 startup responsive.
+      // Keep camera controls responsive immediately when Start Run is pressed.
+      // This lets operators use Start Cam 1 / Start Cam 2 without waiting on
+      // experiment API latency.
       if (typeof onRunStarted === 'function') {
         onRunStarted()
       }
-
-      // Warm camera pipelines in background to reduce first-frame delay for
-      // Cam1/Cam2 right after Start Run.
-      cameraAPI.prewarm(['cam1', 'cam2']).catch(() => {})
 
       const tagList = String(tags || '')
         .split(',')
@@ -288,6 +285,10 @@ export const ExperimentControl = ({
         site: site || undefined,
         tags: tagList,
       })
+
+      // Best-effort warmup after successful start. Backend now skips prewarm
+      // for cameras that already have active MJPEG clients.
+      cameraAPI.prewarm(['cam1', 'cam2'], { timeout: 5000 }).catch(() => {})
 
       await loadData({ initial: false })
       setRunName('')

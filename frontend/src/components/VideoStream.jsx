@@ -112,12 +112,22 @@ export const VideoStream = ({
         `${baseUrl}/api/camera/info?camera_id=${encodeURIComponent(cameraId)}`,
         { cache: 'no-store' }
       )
+      const infoData = infoResponse.ok ? await infoResponse.json() : null
 
       if (infoResponse.status === 404) {
         setError(`Camera ${cameraId} is not enabled in backend configuration.`)
         setConnectionState('disconnected')
         setIsConnecting(false)
         setIsConnected(false)
+        return
+      }
+
+      if (infoData?.webrtc?.allowed_for_camera === false) {
+        usedMjpegFallback = true
+        startMJPEGFallback(
+          baseUrl,
+          `WebRTC disabled for ${cameraId} on backend policy. Using MJPEG mode.`
+        )
         return
       }
 

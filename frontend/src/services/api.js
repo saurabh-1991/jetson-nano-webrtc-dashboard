@@ -92,7 +92,8 @@ export const cameraAPI = {
   getEnabled: () => api.get('/camera/enabled'),
   getFrame: (cameraId = 'cam1') => api.get(`/camera/frame?camera_id=${encodeURIComponent(cameraId)}`),
   getStream: (cameraId = 'cam1') => `${API_BASE}/api/camera/stream?camera_id=${encodeURIComponent(cameraId)}`,
-  prewarm: (cameraIds = ['cam1', 'cam2']) => api.post('/camera/prewarm', { camera_ids: cameraIds }),
+  prewarm: (cameraIds = ['cam1', 'cam2'], requestConfig = {}) =>
+    api.post('/camera/prewarm', { camera_ids: cameraIds }, requestConfig),
   recover: (reason = 'manual_operator_recover', cameraId = 'cam1') =>
     api.post('/camera/recover', { reason, camera_id: cameraId }),
 }

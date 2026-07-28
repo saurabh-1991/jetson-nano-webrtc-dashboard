@@ -73,9 +73,12 @@ class ExperimentManager:
         return False
 
     @staticmethod
-    def _is_writable(path: str) -> bool:
+    def _is_writable(path: str, strict_probe: bool = True) -> bool:
         try:
             os.makedirs(path, exist_ok=True)
+            if not strict_probe:
+                return bool(os.path.isdir(path) and os.access(path, os.W_OK))
+
             probe_file = os.path.join(path, ".write_probe")
             with open(probe_file, "w") as f:
                 f.write("ok")
@@ -86,13 +89,13 @@ class ExperimentManager:
         except Exception:
             return False
 
-    def resolve_storage(self) -> Dict[str, Any]:
+    def resolve_storage(self, strict_probe: bool = True) -> Dict[str, Any]:
         preferred = self._ensure_dir(EXPERIMENTS_STORAGE_PREFERRED_DIR)
         fallback = self._ensure_dir(EXPERIMENTS_STORAGE_FALLBACK_DIR)
 
         preferred_mounted = self._is_mounted(preferred)
-        preferred_writable = self._is_writable(preferred)
-        fallback_writable = self._is_writable(fallback)
+        preferred_writable = self._is_writable(preferred, strict_probe=strict_probe)
+        fallback_writable = self._is_writable(fallback, strict_probe=strict_probe)
 
         if preferred_mounted and preferred_writable:
             selected = preferred
@@ -728,9 +731,27 @@ class ExperimentManager:
         return items
 
     def get_storage_health(self) -> Dict[str, Any]:
-        storage = self.resolve_storage()
-        selected_path = storage["selected_path"]
-        runs_root = storage["runs_root"]
+        health_error = None
+        try:
+            # Health polling path should be fast and non-disruptive.
+            storage = self.resolve_storage(strict_probe=False)
+        except Exception as e:
+            health_error = str(e)
+            preferred = str(EXPERIMENTS_STORAGE_PREFERRED_DIR)
+            fallback = str(EXPERIMENTS_STORAGE_FALLBACK_DIR)
+            storage = {
+                "preferred_path": preferred,
+                "preferred_mounted": self._is_mounted(preferred),
+                "preferred_writable": self._is_writable(preferred, strict_probe=False),
+                "fallback_path": fallback,
+                "fallback_writable": self._is_writable(fallback, strict_probe=False),
+                "selected_path": fallback,
+                "selected_tier": "fallback",
+                "runs_root": os.path.join(fallback, "runs"),
+            }
+
+        selected_path = storage.get("selected_path") or str(EXPERIMENTS_STORAGE_FALLBACK_DIR)
+        runs_root = storage.get("runs_root") or os.path.join(str(EXPERIMENTS_STORAGE_FALLBACK_DIR), "runs")
         run_items = self._scan_run_dirs(runs_root)
 
         try:
@@ -750,6 +771,8 @@ class ExperimentManager:
                 active_run_id = self._active_run.get("run_id")
 
         return {
+            "healthy": health_error is None,
+            "error": health_error,
             "storage": storage,
             "disk": {
                 "total_bytes": total_bytes,
