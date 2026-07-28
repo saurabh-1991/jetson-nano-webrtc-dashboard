@@ -131,6 +131,21 @@ export const eventsAPI = {
   getRecent: () => api.get('/events/recent'),
 }
 
+// Experiment run endpoints
+export const experimentsAPI = {
+  getStorage: (requestConfig = {}) => api.get('/experiments/storage', requestConfig),
+  getStorageHealth: (requestConfig = {}) => api.get('/experiments/storage/health', requestConfig),
+  runStorageCleanup: (payload = {}) => api.post('/experiments/storage/cleanup', payload),
+  getActive: (requestConfig = {}) => api.get('/experiments/active', requestConfig),
+  getHistory: (limit = 20, requestConfig = {}) => api.get(`/experiments/history?limit=${limit}`, requestConfig),
+  start: (payload = {}) => api.post('/experiments/start', payload),
+  stop: (payload = {}) => api.post('/experiments/stop', payload),
+  getArtifacts: (runId) => api.get(`/experiments/${encodeURIComponent(runId)}/artifacts`),
+  getDownloadUrl: (runId) => `${API_BASE}/api/experiments/${encodeURIComponent(runId)}/download`,
+  getMediaUrl: (runId, relativePath) => `${API_BASE}/api/experiments/${encodeURIComponent(runId)}/media?path=${encodeURIComponent(relativePath)}`,
+  getPlayableMediaUrl: (runId, relativePath) => `${API_BASE}/api/experiments/${encodeURIComponent(runId)}/media-playable?path=${encodeURIComponent(relativePath)}`,
+}
+
 // WebRTC endpoints
 export const webrtcAPI = {
   sendOffer: (offer) => api.post('/webrtc/offer', offer),

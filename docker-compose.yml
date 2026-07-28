@@ -27,6 +27,7 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
     volumes:
       - /dev:/dev
+      - /mnt/usb_recordings:/mnt/usb_recordings
       - ./backend:/app
       - ./.git:/workspace/.git:ro
     privileged: true

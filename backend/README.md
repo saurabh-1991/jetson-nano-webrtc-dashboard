@@ -120,6 +120,12 @@ Key settings:
 - `GPIO_LED_PIN`, `GPIO_BUTTON_PIN`
 - `API_HOST`, `API_PORT`
 - `STUN_SERVERS` — used by WebRTC
+- `EXPERIMENTS_STORAGE_PREFERRED_DIR` — preferred storage root (default `/mnt/usb_recordings`)
+- `EXPERIMENTS_STORAGE_FALLBACK_DIR` — fallback storage root (default `/tmp/jetson_dashboard_recordings`)
+- `EXPERIMENTS_ROOT_DIR` — optional alternate root for run discovery
+- `EXPERIMENTS_SENSOR_INTERVAL_SECONDS` — sensor CSV sampling interval
+- `EXPERIMENTS_MANIFEST_FLUSH_SECONDS` — periodic manifest flush interval
+- `EXPERIMENTS_MAX_HISTORY` — max history items returned by API
 
 ## Run the Backend
 
@@ -162,6 +168,17 @@ docker run --privileged -p 8000:8000 jetson-nano-backend
 - `GET /api/sensors/simulation` / `POST /api/sensors/simulation` — simulation mode control
 - `POST /api/safety/heartbeat` — frontend heartbeat for safety monitoring
 - `POST /api/events/frontend` / `GET /api/events/recent` — rolling diagnostics ingestion/retrieval
+
+### Experiments (Slice A)
+
+- `GET /api/experiments/storage` — storage resolution (USB preferred + fallback)
+- `POST /api/experiments/start` — start run; creates run folder + `manifest.json` + `sensors.csv`
+- `POST /api/experiments/stop` — stop run and finalize manifest
+- `GET /api/experiments/active` — active run state
+- `GET /api/experiments/history` — recent run summaries
+- `GET /api/experiments/{id}/artifacts` — run file inventory
+
+Slice A scope currently focuses on control plane + sensor evidence writing (video segment writing comes in later milestones).
 
 ### Camera
 

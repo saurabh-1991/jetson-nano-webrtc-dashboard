@@ -2,11 +2,13 @@ const RETENTION_MS = 2 * 60 * 1000
 const MAX_QUEUE = 400
 const FLUSH_INTERVAL_MS = 5000
 const HEARTBEAT_INTERVAL_MS = 5000
+const HEARTBEAT_MAX_INTERVAL_MS = 20000
 const DUPLICATE_WINDOW_MS = 15000
 
 const queue = []
 let flushTimer = null
 let heartbeatTimer = null
+let heartbeatFailureCount = 0
 const duplicateTracker = new Map()
 
 const sessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -123,7 +125,17 @@ const flushEvents = async () => {
   }
 }
 
+const getHeartbeatDelayMs = () => {
+  const step = Math.max(0, Math.min(3, Number(heartbeatFailureCount || 0)))
+  return Math.min(HEARTBEAT_MAX_INTERVAL_MS, HEARTBEAT_INTERVAL_MS * (2 ** step))
+}
+
 const sendHeartbeat = async () => {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    heartbeatFailureCount = Math.min(heartbeatFailureCount + 1, 6)
+    return false
+  }
+
   try {
     await fetch(`${getApiBase()}/api/safety/heartbeat`, {
       method: 'POST',
@@ -134,9 +146,26 @@ const sendHeartbeat = async () => {
       }),
       keepalive: true,
     })
+    heartbeatFailureCount = 0
+    return true
   } catch (_e) {
-    // no-op
+    heartbeatFailureCount = Math.min(heartbeatFailureCount + 1, 6)
+    return false
   }
+}
+
+const scheduleHeartbeat = (delayMs = HEARTBEAT_INTERVAL_MS) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+  if (heartbeatTimer) {
+    clearTimeout(heartbeatTimer)
+  }
+
+  heartbeatTimer = window.setTimeout(async () => {
+    await sendHeartbeat()
+    scheduleHeartbeat(getHeartbeatDelayMs())
+  }, delayMs)
 }
 
 const bindBrowserErrorHooks = () => {
@@ -191,12 +220,10 @@ export const initializeEventLogger = () => {
     flushEvents()
   }, FLUSH_INTERVAL_MS)
 
-  heartbeatTimer = window.setInterval(() => {
-    sendHeartbeat()
-  }, HEARTBEAT_INTERVAL_MS)
-
-  // Send immediately on startup for faster watchdog arming.
-  sendHeartbeat()
+  // Send immediately on startup for faster watchdog arming, then continue with adaptive cadence.
+  sendHeartbeat().finally(() => {
+    scheduleHeartbeat(getHeartbeatDelayMs())
+  })
 
   window.addEventListener('beforeunload', () => {
     flushEvents()
@@ -209,7 +236,7 @@ export const shutdownEventLogger = () => {
     flushTimer = null
   }
   if (heartbeatTimer) {
-    clearInterval(heartbeatTimer)
+    clearTimeout(heartbeatTimer)
     heartbeatTimer = null
   }
   flushEvents()

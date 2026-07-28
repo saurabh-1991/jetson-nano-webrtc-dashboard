@@ -2,6 +2,16 @@ import React, { useState, useEffect, useRef } from 'react'
 import { cameraAPI, systemAPI } from '../services/api'
 import './DeviceStatus.css'
 
+const STATUS_BASE_MS = 5000
+const STATUS_MAX_MS = 20000
+const CAMERA_BASE_MS = 1800
+const CAMERA_MAX_MS = 8000
+
+function getBackoffDelay(baseMs, maxMs, failureCount) {
+  const step = Math.max(0, Math.min(4, Number(failureCount || 0)))
+  return Math.min(maxMs, baseMs * (2 ** step))
+}
+
 export const DeviceStatus = () => {
   const [status, setStatus] = useState(null)
   const [cameraIds, setCameraIds] = useState(['cam1'])
@@ -14,6 +24,10 @@ export const DeviceStatus = () => {
   const [recoverMessage, setRecoverMessage] = useState({ cam1: '', cam2: '' })
   const [error, setError] = useState(null)
   const [isCameraRefreshing, setIsCameraRefreshing] = useState(false)
+  const [statusFailures, setStatusFailures] = useState(0)
+  const [cameraFailures, setCameraFailures] = useState(0)
+  const statusFailuresRef = useRef(0)
+  const cameraFailuresRef = useRef(0)
 
   const fetchStatus = async () => {
     try {
@@ -25,10 +39,16 @@ export const DeviceStatus = () => {
         cameraIdsRef.current = ids
         setCameraIds(ids)
       }
+      statusFailuresRef.current = 0
+      setStatusFailures(0)
       setError(null)
+      return true
     } catch (err) {
       console.error('Failed to fetch device status:', err)
-      setError('Failed to load device status')
+      statusFailuresRef.current += 1
+      setStatusFailures(statusFailuresRef.current)
+      setError((prev) => prev || 'Connection unstable. Showing last known status and retrying.')
+      return false
     } finally {
       setIsRefreshing(false)
       setLoading(false)
@@ -58,9 +78,18 @@ export const DeviceStatus = () => {
 
       if (responses.some((result) => result.status === 'fulfilled')) {
         setCameraLastUpdatedAt(Date.now())
+        cameraFailuresRef.current = 0
+        setCameraFailures(0)
+        return true
       }
+      cameraFailuresRef.current += 1
+      setCameraFailures(cameraFailuresRef.current)
+      return false
     } catch (_err) {
       // Ignore - keep last known camera state to avoid UI flicker.
+      cameraFailuresRef.current += 1
+      setCameraFailures(cameraFailuresRef.current)
+      return false
     }
   }
 
@@ -71,29 +100,39 @@ export const DeviceStatus = () => {
     let statusInFlight = false
     let cameraInFlight = false
 
-    const scheduleStatus = (delayMs = 3000) => {
+    const scheduleStatus = (delayMs = STATUS_BASE_MS) => {
       if (!mounted) return
       statusTimer = setTimeout(async () => {
         if (!statusInFlight) {
           statusInFlight = true
-          await fetchStatus()
+          const ok = await fetchStatus()
           statusInFlight = false
+          const nextMs = ok
+            ? STATUS_BASE_MS
+            : getBackoffDelay(STATUS_BASE_MS, STATUS_MAX_MS, statusFailuresRef.current)
+          scheduleStatus(nextMs)
+          return
         }
-        scheduleStatus(5000)
+        scheduleStatus(STATUS_BASE_MS)
       }, delayMs)
     }
 
-    const scheduleCamera = (delayMs = 1200) => {
+    const scheduleCamera = (delayMs = CAMERA_BASE_MS) => {
       if (!mounted) return
       cameraTimer = setTimeout(async () => {
         if (!cameraInFlight) {
           cameraInFlight = true
           setIsCameraRefreshing(true)
-          await fetchCameras()
+          const ok = await fetchCameras()
           setIsCameraRefreshing(false)
           cameraInFlight = false
+          const nextMs = ok
+            ? CAMERA_BASE_MS
+            : getBackoffDelay(CAMERA_BASE_MS, CAMERA_MAX_MS, cameraFailuresRef.current)
+          scheduleCamera(nextMs)
+          return
         }
-        scheduleCamera(1800)
+        scheduleCamera(CAMERA_BASE_MS)
       }, delayMs)
     }
 
@@ -161,10 +200,17 @@ export const DeviceStatus = () => {
   const cameraEntries = cameraIds.map((id) => ({ id, label: getCameraLabel(id) }))
 
   const cameraStatusFresh = cameraLastUpdatedAt > 0 && (Date.now() - cameraLastUpdatedAt) <= 3500
+  const hasDegradedSync = statusFailures >= 2 || cameraFailures >= 3
 
   return (
     <div className="device-status-container">
       <h2>Status / Indicator</h2>
+
+      {hasDegradedSync && (
+        <div className="status-warning-banner">
+          Network jitter detected. Device status is using last known values while retrying.
+        </div>
+      )}
 
       <div className="status-grid">
         <div className="status-card">

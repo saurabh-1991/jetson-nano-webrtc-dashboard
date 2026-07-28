@@ -3,6 +3,13 @@ import { eventsAPI } from '../services/api'
 import './TroubleshootLogs.css'
 
 const MAX_RENDERED_EVENTS = 120
+const LOGS_BASE_POLL_MS = 3000
+const LOGS_MAX_POLL_MS = 12000
+
+function getLogsBackoffMs(failureCount) {
+  const step = Math.max(0, Math.min(3, Number(failureCount || 0)))
+  return Math.min(LOGS_MAX_POLL_MS, LOGS_BASE_POLL_MS * (2 ** step))
+}
 
 function formatTs(iso, ts) {
   if (iso) {
@@ -61,6 +68,8 @@ export const TroubleshootLogs = ({ enabled }) => {
   const [safety, setSafety] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [failureStreak, setFailureStreak] = useState(0)
+  const [lastSuccessAt, setLastSuccessAt] = useState(null)
 
   useEffect(() => {
     if (!enabled) {
@@ -68,9 +77,14 @@ export const TroubleshootLogs = ({ enabled }) => {
     }
 
     let mounted = true
+    let timer = null
+    let inFlight = false
+    let localFailureStreak = 0
 
     const fetchRecent = async () => {
       try {
+        if (inFlight) return
+        inFlight = true
         if (!mounted) return
         setLoading((prev) => prev || events.length === 0)
 
@@ -83,24 +97,33 @@ export const TroubleshootLogs = ({ enabled }) => {
         setEvents(nextEvents)
         setMeta(payload?.meta || null)
         setSafety(payload?.safety || null)
+        localFailureStreak = 0
+        setFailureStreak(0)
+        setLastSuccessAt(new Date().toISOString())
         setError(null)
       } catch (err) {
         if (!mounted) return
         console.error('Failed to fetch troubleshooting logs:', err)
-        setError('Failed to fetch troubleshooting logs')
+        localFailureStreak += 1
+        setFailureStreak(localFailureStreak)
+        if (localFailureStreak >= 2) {
+          setError('Logs stream delayed by connection issues. Retrying with backoff...')
+        }
       } finally {
+        inFlight = false
         if (mounted) {
           setLoading(false)
+          const nextMs = getLogsBackoffMs(localFailureStreak)
+          timer = setTimeout(fetchRecent, nextMs)
         }
       }
     }
 
     fetchRecent()
-    const interval = setInterval(fetchRecent, 3000)
 
     return () => {
       mounted = false
-      clearInterval(interval)
+      if (timer) clearTimeout(timer)
     }
   }, [enabled])
 
@@ -177,6 +200,8 @@ export const TroubleshootLogs = ({ enabled }) => {
         <span className="logs-chip">Retention: {meta?.retention_seconds ?? 120}s</span>
         <span className="logs-chip">Safety resets: {safety?.safety_reset_count ?? 0}</span>
         <span className="logs-chip">HB age: {safety?.last_frontend_heartbeat_age_seconds ?? 'NA'}s</span>
+        {lastSuccessAt && <span className="logs-chip">Last sync: {formatTs(lastSuccessAt)}</span>}
+        {failureStreak >= 2 && <span className="logs-chip warn">Sync delayed</span>}
       </div>
 
       {error && <div className="logs-error">{error}</div>}

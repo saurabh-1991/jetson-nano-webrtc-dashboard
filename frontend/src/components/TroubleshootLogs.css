@@ -72,6 +72,12 @@
   color: #cbd5e1;
 }
 
+.logs-chip.warn {
+  background: #78350f;
+  border-color: #f59e0b;
+  color: #fef3c7;
+}
+
 .logs-error {
   margin: 0.6rem 1rem;
   background: #7f1d1d;

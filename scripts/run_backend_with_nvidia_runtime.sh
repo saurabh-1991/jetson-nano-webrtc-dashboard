@@ -57,6 +57,7 @@ docker run -d \
   --network-alias jetson-backend \
   -p 8000:8000 \
   -v /dev:/dev \
+  -v /mnt/usb_recordings:/mnt/usb_recordings \
   -v "$PROJECT_DIR/backend:/app" \
   -v "$PROJECT_DIR/.git:/workspace/.git:ro" \
   -e PYTHONUNBUFFERED=1 \

@@ -9,10 +9,14 @@ import os
 import time
 import uuid
 import subprocess
+import tempfile
+import shutil
+import mimetypes
+import hashlib
 from datetime import datetime
 from typing import Any, Dict, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
@@ -23,6 +27,13 @@ from .config import (
     CAMERA_DEFAULT_ID,
     CAMERA_PROFILES,
     CAMERA_STRICT_CAMERA_IDS,
+    EXPERIMENTS_CLEANUP_INTERVAL_SECONDS,
+    EXPERIMENTS_LOW_WATERMARK_GB,
+    EXPERIMENTS_MAX_TOTAL_GB,
+    EXPERIMENTS_PLAYABLE_CACHE_DIR,
+    EXPERIMENTS_PLAYABLE_CACHE_MAX_GB,
+    EXPERIMENTS_PLAYABLE_CACHE_TTL_HOURS,
+    EXPERIMENTS_RETENTION_DAYS,
 )
 from .camera import (
     get_camera,
@@ -36,6 +47,7 @@ from .gpio_control import get_gpio_controller
 from . import gpio_control as gpio_module
 from .sensor_data import get_sensor_data_service
 from .event_logger import get_event_logger
+from .experiments import get_experiment_manager
 from .websocket import (
     handle_websocket_connection,
     get_device_status,
@@ -124,6 +136,8 @@ def get_software_version_info() -> Dict[str, str]:
 status_broadcast_task = None
 camera_idle_watchdog_task = None
 safety_watchdog_task = None
+experiment_cleanup_task = None
+experiment_manager = None
 active_mjpeg_sessions = {}
 active_mjpeg_lock = asyncio.Lock()
 CAMERA_IDLE_RELEASE_SECONDS = max(3, int(os.getenv("CAMERA_IDLE_RELEASE_SECONDS", "6")))
@@ -138,6 +152,145 @@ frontend_heartbeat_seen = False
 last_control_activity_ts = time.time()
 safety_reset_count = 0
 next_event_compact_ts = 0.0
+
+
+def _get_experiment_manager():
+    """Lazily ensure experiment manager is available for API handlers."""
+    global experiment_manager
+    if experiment_manager is None:
+        sensor_service = get_sensor_data_service()
+        experiment_manager = get_experiment_manager(sensor_service.get_latest)
+    return experiment_manager
+
+
+def _ensure_playable_h264_mp4(source_path: str) -> str:
+    """Transcode source video to browser-friendly H264 MP4 and cache by file fingerprint.
+
+    If transcoding fails on device-specific FFmpeg/OpenCV combinations, return the original
+    source path so playback can still proceed using the raw artifact.
+    """
+    cache_dir = EXPERIMENTS_PLAYABLE_CACHE_DIR
+    os.makedirs(cache_dir, exist_ok=True)
+
+    st = os.stat(source_path)
+    # Version the cache key so older pre-fix artifacts are ignored.
+    fingerprint = "v2h264|{0}|{1}|{2}".format(source_path, int(st.st_size), int(st.st_mtime_ns))
+    cache_key = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:24]
+    playable_path = os.path.join(cache_dir, "{0}.mp4".format(cache_key))
+
+    def _probe_codec(path: str) -> str:
+        try:
+            probe = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=codec_name",
+                    "-of",
+                    "default=nokey=1:noprint_wrappers=1",
+                    path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=20,
+                check=False,
+            )
+            return (probe.stdout or "").strip().lower()
+        except Exception:
+            return ""
+
+    if os.path.isfile(playable_path) and os.path.getsize(playable_path) > 0:
+        cached_codec = _probe_codec(playable_path)
+        # Keep only browser-friendly H264 cache artifacts.
+        if cached_codec == "h264":
+            return playable_path
+        try:
+            os.remove(playable_path)
+        except Exception:
+            pass
+
+    tmp_path = playable_path + ".tmp.mp4"
+
+    # Primary path: libx264 for broad browser compatibility.
+    cmd_h264 = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        source_path,
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-movflags",
+        "+faststart",
+        "-f",
+        "mp4",
+        tmp_path,
+    ]
+
+    # Jetson-oriented fallback: hardware OMX H264 encoder when available.
+    cmd_h264_omx = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        source_path,
+        "-an",
+        "-c:v",
+        "h264_omx",
+        "-b:v",
+        "2M",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "-f",
+        "mp4",
+        tmp_path,
+    ]
+
+    def _run_ffmpeg(cmd):
+        try:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=240,
+                check=False,
+            )
+            if result.returncode != 0:
+                logger.warning(
+                    "ffmpeg transcode failed (rc=%s): %s | stderr_tail=%s",
+                    result.returncode,
+                    " ".join(cmd),
+                    (result.stderr or "")[-1200:],
+                )
+                return False
+
+            if not (os.path.isfile(tmp_path) and os.path.getsize(tmp_path) > 0):
+                return False
+
+            # Encoder is explicitly set to H264 (`libx264` or `h264_omx`), so a
+            # successful ffmpeg return code plus non-empty output is sufficient.
+            return True
+        except Exception as e:
+            logger.warning("ffmpeg transcode exception: %s", e)
+            return False
+
+    ok = _run_ffmpeg(cmd_h264)
+    if not ok:
+        ok = _run_ffmpeg(cmd_h264_omx)
+
+    if not ok:
+        return source_path
+
+    os.replace(tmp_path, playable_path)
+    return playable_path
 
 
 def _resolve_camera_id(camera_id: str = None) -> str:
@@ -164,6 +317,116 @@ def _resolve_camera_id(camera_id: str = None) -> str:
         return available_ids[0]
 
     raise HTTPException(status_code=503, detail="No cameras are configured/enabled")
+
+
+def _cleanup_playable_cache() -> Dict[str, Any]:
+    cache_dir = EXPERIMENTS_PLAYABLE_CACHE_DIR
+    os.makedirs(cache_dir, exist_ok=True)
+
+    ttl_seconds = float(max(0.0, EXPERIMENTS_PLAYABLE_CACHE_TTL_HOURS) * 3600.0)
+    max_total_bytes = int(max(0.0, EXPERIMENTS_PLAYABLE_CACHE_MAX_GB) * 1024 * 1024 * 1024)
+    now_ts = time.time()
+
+    items = []
+    for name in os.listdir(cache_dir):
+        path = os.path.join(cache_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            st = os.stat(path)
+        except Exception:
+            continue
+        items.append(
+            {
+                "path": path,
+                "name": name,
+                "mtime": float(st.st_mtime),
+                "size": int(st.st_size),
+            }
+        )
+
+    removed = []
+    reclaimed_bytes = 0
+
+    # Pass 1: TTL expiration
+    if ttl_seconds > 0:
+        for item in list(items):
+            if (now_ts - item["mtime"]) >= ttl_seconds:
+                try:
+                    os.remove(item["path"])
+                    removed.append({"name": item["name"], "reason": "ttl", "size_bytes": item["size"]})
+                    reclaimed_bytes += int(item["size"])
+                    items.remove(item)
+                except Exception:
+                    continue
+
+    # Pass 2: size cap (oldest first)
+    if max_total_bytes > 0:
+        items.sort(key=lambda x: x["mtime"])
+        total_bytes = int(sum(item["size"] for item in items))
+        for item in items:
+            if total_bytes <= max_total_bytes:
+                break
+            try:
+                os.remove(item["path"])
+                removed.append({"name": item["name"], "reason": "size_cap", "size_bytes": item["size"]})
+                reclaimed_bytes += int(item["size"])
+                total_bytes = max(0, total_bytes - int(item["size"]))
+            except Exception:
+                continue
+
+    try:
+        final_total_bytes = int(
+            sum(
+                int(os.path.getsize(os.path.join(cache_dir, n)))
+                for n in os.listdir(cache_dir)
+                if os.path.isfile(os.path.join(cache_dir, n))
+            )
+        )
+    except Exception:
+        final_total_bytes = 0
+
+    return {
+        "cache_dir": cache_dir,
+        "removed_count": len(removed),
+        "removed": removed,
+        "reclaimed_bytes": int(reclaimed_bytes),
+        "total_bytes": final_total_bytes,
+        "ttl_hours": float(EXPERIMENTS_PLAYABLE_CACHE_TTL_HOURS),
+        "max_gb": float(EXPERIMENTS_PLAYABLE_CACHE_MAX_GB),
+    }
+
+
+async def experiment_cleanup_loop():
+    while True:
+        try:
+            await asyncio.sleep(float(EXPERIMENTS_CLEANUP_INTERVAL_SECONDS))
+            manager = _get_experiment_manager()
+
+            storage_result = await run_in_threadpool(
+                manager.cleanup_storage,
+                EXPERIMENTS_RETENTION_DAYS,
+                EXPERIMENTS_MAX_TOTAL_GB,
+                EXPERIMENTS_LOW_WATERMARK_GB,
+            )
+            cache_result = await run_in_threadpool(_cleanup_playable_cache)
+
+            if int(storage_result.get("removed_count", 0)) > 0 or int(cache_result.get("removed_count", 0)) > 0:
+                get_event_logger().log_event(
+                    source="backend",
+                    event_type="storage_cleanup",
+                    severity="info",
+                    payload={
+                        "removed_runs": int(storage_result.get("removed_count", 0)),
+                        "reclaimed_run_bytes": int(storage_result.get("reclaimed_bytes", 0)),
+                        "removed_cache_files": int(cache_result.get("removed_count", 0)),
+                        "reclaimed_cache_bytes": int(cache_result.get("reclaimed_bytes", 0)),
+                    },
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Experiment cleanup loop error: %s", e)
 
 
 def _ensure_camera_session_bucket(camera_id: str):
@@ -307,17 +570,20 @@ app = FastAPI(
 # Startup and shutdown handlers (compatible with Python 3.6)
 @app.on_event("startup")
 async def on_startup():
-    global status_broadcast_task, camera_idle_watchdog_task, safety_watchdog_task
+    global status_broadcast_task, camera_idle_watchdog_task, safety_watchdog_task, experiment_cleanup_task, experiment_manager
     logger.info("Starting Jetson Nano Dashboard backend")
     status_broadcast_task = asyncio.ensure_future(broadcast_device_status())
     camera_idle_watchdog_task = asyncio.ensure_future(camera_idle_watchdog())
     safety_watchdog_task = asyncio.ensure_future(safety_watchdog_loop())
+    experiment_cleanup_task = asyncio.ensure_future(experiment_cleanup_loop())
+    sensor_service = get_sensor_data_service()
+    experiment_manager = get_experiment_manager(sensor_service.get_latest)
     get_event_logger().log_event("backend", "startup", "info", {"version": "1.0.0"})
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    global status_broadcast_task, camera_idle_watchdog_task, safety_watchdog_task
+    global status_broadcast_task, camera_idle_watchdog_task, safety_watchdog_task, experiment_cleanup_task, experiment_manager
     logger.info("Shutting down Jetson Nano Dashboard backend")
     get_event_logger().log_event("backend", "shutdown", "info", {})
     if status_broadcast_task:
@@ -338,6 +604,15 @@ async def on_shutdown():
             await safety_watchdog_task
         except asyncio.CancelledError:
             pass
+    if experiment_cleanup_task:
+        experiment_cleanup_task.cancel()
+        try:
+            await experiment_cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+    if experiment_manager is not None:
+        await run_in_threadpool(experiment_manager.stop_if_active, "backend_shutdown")
 
     # Clean up resources
     release_all_cameras()
@@ -602,6 +877,228 @@ async def sensors_simulation_set(payload: dict):
         "enabled": service.is_simulation_enabled(),
         "timestamp": datetime.now().isoformat()
     }
+
+
+# ==================== EXPERIMENT ENDPOINTS (SLICE A) ====================
+
+@app.get("/api/experiments/storage")
+async def experiments_storage_info():
+    """Show current storage resolution status (preferred USB path + fallback path)."""
+    manager = _get_experiment_manager()
+
+    try:
+        info = await run_in_threadpool(manager.resolve_storage)
+        return {
+            **info,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/experiments/storage/health")
+async def experiments_storage_health():
+    """Get detailed experiment storage and disk utilization health."""
+    manager = _get_experiment_manager()
+
+    try:
+        health = await run_in_threadpool(manager.get_storage_health)
+        health["timestamp"] = datetime.now().isoformat()
+        return health
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/experiments/storage/cleanup")
+async def experiments_storage_cleanup(payload: Dict[str, Any] = None):
+    """Trigger retention cleanup immediately (manual operator action)."""
+    manager = _get_experiment_manager()
+    payload = payload or {}
+
+    retention_days = float(payload.get("retention_days", EXPERIMENTS_RETENTION_DAYS))
+    max_total_gb = float(payload.get("max_total_gb", EXPERIMENTS_MAX_TOTAL_GB))
+    low_watermark_gb = float(payload.get("low_watermark_gb", EXPERIMENTS_LOW_WATERMARK_GB))
+
+    try:
+        storage_result = await run_in_threadpool(
+            manager.cleanup_storage,
+            retention_days,
+            max_total_gb,
+            low_watermark_gb,
+        )
+        cache_result = await run_in_threadpool(_cleanup_playable_cache)
+        return {
+            "ok": True,
+            "storage": storage_result,
+            "playable_cache": cache_result,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/experiments/start")
+async def experiments_start(payload: Dict[str, Any] = None):
+    """Start an experiment run and begin per-run sensor CSV capture."""
+    manager = _get_experiment_manager()
+
+    payload = payload or {}
+    payload["software"] = get_software_version_info()
+    payload["camera_mapping"] = {
+        camera_id: dict(CAMERA_PROFILES.get(camera_id, {})) for camera_id in get_camera_ids()
+    }
+
+    try:
+        run = await run_in_threadpool(manager.start_run, payload)
+        get_event_logger().log_event(
+            source="backend",
+            event_type="experiment_started",
+            severity="info",
+            payload={
+                "run_id": run.get("run", {}).get("run_id"),
+                "run_name": run.get("run", {}).get("run_name"),
+            },
+        )
+        return {
+            "ok": True,
+            "active": run,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/experiments/stop")
+async def experiments_stop(payload: Dict[str, Any] = None):
+    """Stop active experiment run and finalize manifest."""
+    manager = _get_experiment_manager()
+
+    payload = payload or {}
+    reason = str(payload.get("reason") or "manual_stop")
+
+    try:
+        summary = await run_in_threadpool(manager.stop_run, reason)
+        get_event_logger().log_event(
+            source="backend",
+            event_type="experiment_stopped",
+            severity="info",
+            payload={
+                "run_id": summary.get("run_id"),
+                "sample_count": summary.get("sample_count"),
+                "duration_seconds": summary.get("duration_seconds"),
+                "stop_reason": reason,
+            },
+        )
+        return {
+            "ok": True,
+            "summary": summary,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/experiments/active")
+async def experiments_active():
+    """Get current active experiment status."""
+    manager = _get_experiment_manager()
+    active = await run_in_threadpool(manager.get_active_run)
+    return {
+        **active,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/experiments/history")
+async def experiments_history(limit: int = 50):
+    """List recent experiment runs from preferred/fallback storage roots."""
+    manager = _get_experiment_manager()
+
+    try:
+        history = await run_in_threadpool(manager.list_history, limit)
+        return {
+            **history,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/experiments/{run_id}/artifacts")
+async def experiments_artifacts(run_id: str):
+    """Get run artifacts and file inventory for a specific run id."""
+    manager = _get_experiment_manager()
+
+    try:
+        artifacts = await run_in_threadpool(manager.get_artifacts, run_id)
+        artifacts["timestamp"] = datetime.now().isoformat()
+        return artifacts
+    except RuntimeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/experiments/{run_id}/download")
+async def experiments_download(run_id: str):
+    """Download all run artifacts as a ZIP archive."""
+    manager = _get_experiment_manager()
+
+    try:
+        run_dir = await run_in_threadpool(manager.resolve_run_dir, run_id)
+        temp_root = tempfile.mkdtemp(prefix="exp-download-")
+        archive_base = os.path.join(temp_root, run_id)
+        archive_path = shutil.make_archive(archive_base, "zip", run_dir)
+
+        return FileResponse(
+            archive_path,
+            media_type="application/zip",
+            filename="{0}.zip".format(run_id),
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/experiments/{run_id}/media")
+async def experiments_media(run_id: str, path: str):
+    """Serve a run artifact file for playback (e.g. MP4)."""
+    manager = _get_experiment_manager()
+
+    try:
+        file_path = await run_in_threadpool(manager.resolve_run_file, run_id, path)
+        mime, _ = mimetypes.guess_type(file_path)
+        media_type = mime or "application/octet-stream"
+        filename = os.path.basename(file_path)
+        return FileResponse(file_path, media_type=media_type, filename=filename)
+    except RuntimeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/experiments/{run_id}/media-playable")
+async def experiments_media_playable(run_id: str, path: str):
+    """Serve a browser-friendly playback file (H264 MP4 cache) for a run artifact."""
+    manager = _get_experiment_manager()
+
+    try:
+        source_path = await run_in_threadpool(manager.resolve_run_file, run_id, path)
+        playable_path = await run_in_threadpool(_ensure_playable_h264_mp4, source_path)
+        return FileResponse(
+            playable_path,
+            media_type="video/mp4",
+            filename=os.path.basename(playable_path),
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==================== CAMERA ENDPOINTS ====================
