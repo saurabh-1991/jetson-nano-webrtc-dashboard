@@ -1592,6 +1592,20 @@ class CameraCapture:
             self._jpeg_encode_count += 1
             return True, self._last_jpeg_bytes
 
+    def get_cached_frame(self, max_age_seconds: float = 0.35) -> tuple:
+        """Return the latest cached frame if it's fresh enough, without reading camera again."""
+        with self._frame_lock:
+            if self._last_frame is None:
+                return False, None
+
+            age_seconds = time.perf_counter() - float(self._last_frame_timestamp or 0.0)
+            if age_seconds > float(max(0.01, max_age_seconds)):
+                return False, None
+
+            self._last_client_access_ts = time.time()
+            self._frame_cache_hits += 1
+            return True, self._last_frame.copy()
+
     def get_performance_stats(self) -> dict:
         """Return camera cache/encoding performance counters."""
         with self._frame_lock:

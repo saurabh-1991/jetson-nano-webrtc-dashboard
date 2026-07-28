@@ -1043,6 +1043,36 @@ async def experiments_artifacts(run_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/api/experiments/{run_id}")
+async def experiments_delete_run(run_id: str):
+    """Delete an experiment run and reclaim disk space."""
+    manager = _get_experiment_manager()
+
+    try:
+        result = await run_in_threadpool(manager.delete_run, run_id)
+        get_event_logger().log_event(
+            source="backend",
+            event_type="experiment_deleted",
+            severity="warning",
+            payload={
+                "run_id": run_id,
+                "reclaimed_bytes": int(result.get("reclaimed_bytes", 0)),
+            },
+        )
+        return {
+            "ok": True,
+            **result,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except RuntimeError as e:
+        text = str(e)
+        if "active run" in text.lower():
+            raise HTTPException(status_code=409, detail=text)
+        raise HTTPException(status_code=404, detail=text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/experiments/{run_id}/download")
 async def experiments_download(run_id: str):
     """Download all run artifacts as a ZIP archive."""

@@ -136,6 +136,7 @@ export const experimentsAPI = {
   getStorage: (requestConfig = {}) => api.get('/experiments/storage', requestConfig),
   getStorageHealth: (requestConfig = {}) => api.get('/experiments/storage/health', requestConfig),
   runStorageCleanup: (payload = {}) => api.post('/experiments/storage/cleanup', payload),
+  deleteRun: (runId) => api.delete(`/experiments/${encodeURIComponent(runId)}`),
   getActive: (requestConfig = {}) => api.get('/experiments/active', requestConfig),
   getHistory: (limit = 20, requestConfig = {}) => api.get(`/experiments/history?limit=${limit}`, requestConfig),
   start: (payload = {}) => api.post('/experiments/start', payload),

@@ -12,7 +12,9 @@ from typing import Any, Callable, Dict, List, Optional
 import cv2
 
 from .config import (
+    EXPERIMENTS_VIDEO_CACHE_MAX_AGE_SECONDS,
     EXPERIMENTS_MANIFEST_FLUSH_SECONDS,
+    EXPERIMENTS_VIDEO_DIRECT_PULL_INTERVAL_SECONDS,
     EXPERIMENTS_MAX_HISTORY,
     EXPERIMENTS_ROOT_DIR,
     EXPERIMENTS_SENSOR_INTERVAL_SECONDS,
@@ -22,6 +24,7 @@ from .config import (
     EXPERIMENTS_VIDEO_ENABLED,
     EXPERIMENTS_VIDEO_FPS,
     EXPERIMENTS_VIDEO_SEGMENT_SECONDS,
+    EXPERIMENTS_VIDEO_USE_SHARED_FRAME_CACHE,
 )
 
 logger = logging.getLogger(__name__)
@@ -171,6 +174,7 @@ class ExperimentManager:
         video_path = None
         segment_target_seconds = int(max(0, int(EXPERIMENTS_VIDEO_SEGMENT_SECONDS)))
         started_epoch = time.time()
+        last_direct_pull_ts = 0.0
 
         try:
             from .camera import get_camera
@@ -307,9 +311,19 @@ class ExperimentManager:
 
         while not stop_event.is_set():
             try:
-                ok, frame = camera.get_frame()
+                ok, frame = False, None
+                now_ts = time.time()
+
+                if EXPERIMENTS_VIDEO_USE_SHARED_FRAME_CACHE and hasattr(camera, "get_cached_frame"):
+                    ok, frame = camera.get_cached_frame(max_age_seconds=EXPERIMENTS_VIDEO_CACHE_MAX_AGE_SECONDS)
+
+                # Fallback: pull directly at a throttled cadence only when cache is stale/missing.
+                if (not ok or frame is None) and (now_ts - last_direct_pull_ts) >= float(EXPERIMENTS_VIDEO_DIRECT_PULL_INTERVAL_SECONDS):
+                    ok, frame = camera.get_frame()
+                    last_direct_pull_ts = now_ts
+
                 if not ok or frame is None:
-                    time.sleep(0.03)
+                    time.sleep(0.02)
                     continue
 
                 if writer is None:
@@ -947,6 +961,29 @@ class ExperimentManager:
             raise RuntimeError("File not found: {0}".format(relative_path))
 
         return full
+
+    def delete_run(self, run_id: str) -> Dict[str, Any]:
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            raise RuntimeError("run_id is required")
+
+        with self._lock:
+            if self._active_run is not None and str(self._active_run.get("run_id")) == run_id:
+                raise RuntimeError("Cannot delete active run")
+
+        run_dir = self.resolve_run_dir(run_id)
+        reclaimed_bytes = self._run_dir_size_bytes(run_dir)
+
+        shutil.rmtree(run_dir, ignore_errors=False)
+
+        health = self.get_storage_health()
+        return {
+            "run_id": run_id,
+            "run_dir": run_dir,
+            "deleted": True,
+            "reclaimed_bytes": int(reclaimed_bytes),
+            "health": health,
+        }
 
 
 experiment_manager = None

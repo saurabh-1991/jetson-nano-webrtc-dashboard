@@ -52,16 +52,34 @@
 }
 
 .refresh-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   font-size: 0.8rem;
   padding: 0.25rem 0.55rem;
   border-radius: 999px;
   background: #eef2ff;
   color: #3730a3;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.refresh-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.45;
+  transition: opacity 0.25s ease, transform 0.25s ease;
 }
 
 .refresh-pill.active {
   background: #dbeafe;
   color: #1d4ed8;
+}
+
+.refresh-pill.active .refresh-pill-dot {
+  opacity: 1;
+  transform: scale(1.15);
 }
 
 .refresh-pill.warn {
@@ -266,6 +284,16 @@
 
 .download-btn:hover {
   background: #dbeafe;
+}
+
+.download-btn.delete-btn {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #b91c1c;
+}
+
+.download-btn.delete-btn:hover:not(:disabled) {
+  background: #ffe4e6;
 }
 
 .playback-label {

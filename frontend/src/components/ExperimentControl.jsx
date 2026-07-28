@@ -73,6 +73,7 @@ export const ExperimentControl = ({
   const [isStarting, setIsStarting] = useState(false)
   const [isStopping, setIsStopping] = useState(false)
   const [isRunningCleanup, setIsRunningCleanup] = useState(false)
+  const [deletingRunId, setDeletingRunId] = useState('')
   const [consecutiveFailures, setConsecutiveFailures] = useState(0)
   const [lastSuccessfulRefreshAt, setLastSuccessfulRefreshAt] = useState(null)
   const [error, setError] = useState(null)
@@ -218,6 +219,27 @@ export const ExperimentControl = ({
       setError(typeof detail === 'string' ? detail : 'Failed to run storage cleanup')
     } finally {
       setIsRunningCleanup(false)
+    }
+  }
+
+  const handleDeleteRun = async (runId) => {
+    if (!runId) return
+
+    const confirmed = window.confirm(
+      `Delete experiment ${runId}? This permanently removes sensor/video artifacts and cannot be undone.`
+    )
+    if (!confirmed) return
+
+    try {
+      setDeletingRunId(runId)
+      setError(null)
+      await experimentsAPI.deleteRun(runId)
+      await loadData({ initial: false })
+    } catch (deleteErr) {
+      const detail = deleteErr?.response?.data?.detail
+      setError(typeof detail === 'string' ? detail : 'Failed to delete experiment run')
+    } finally {
+      setDeletingRunId('')
     }
   }
 
@@ -395,7 +417,8 @@ export const ExperimentControl = ({
       <div className="experiment-control-header">
         <h2>{title}</h2>
         <span className={`refresh-pill ${isRefreshing ? 'active' : ''} ${hasDegradedSync ? 'warn' : ''}`}>
-          {isRefreshing ? 'Refreshing…' : 'Auto-refresh'}
+          <span className="refresh-pill-dot" aria-hidden="true" />
+          Auto-refresh
         </span>
       </div>
 
@@ -540,6 +563,7 @@ export const ExperimentControl = ({
                         <th>Samples</th>
                         <th>Started</th>
                         <th>Download</th>
+                        <th>Delete</th>
                         {showPlayback && <th>Recorded View</th>}
                       </tr>
                     </thead>
@@ -559,6 +583,16 @@ export const ExperimentControl = ({
                               onClick={() => handleDownload(item.run_id)}
                             >
                               Download
+                            </button>
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="download-btn delete-btn"
+                              onClick={() => handleDeleteRun(item.run_id)}
+                              disabled={deletingRunId === item.run_id || item.state === 'active' || !!active?.active && active?.run?.run_id === item.run_id}
+                            >
+                              {deletingRunId === item.run_id ? 'Deleting…' : 'Delete'}
                             </button>
                           </td>
                           {showPlayback && (

@@ -25,6 +25,7 @@ export const VideoStream = ({
   const [notice, setNotice] = useState(null)
   const [streamMode, setStreamMode] = useState('none') // none | webrtc | mjpeg
   const [mjpegUrl, setMjpegUrl] = useState('')
+  const [mjpegGuardActive, setMjpegGuardActive] = useState(false)
   const [liveStats, setLiveStats] = useState(null)
   const [statsError, setStatsError] = useState(false)
   const pcRef = useRef(null)
@@ -76,6 +77,7 @@ export const VideoStream = ({
     setConnectionState('connecting')
     setIsConnecting(true)
     setIsConnected(false)
+    setMjpegGuardActive(false)
     setError(null)
 
     // timestamp prevents stale browser cache
@@ -233,6 +235,7 @@ export const VideoStream = ({
     setMjpegUrl('')
     setStreamMode('none')
     setNotice(null)
+    setMjpegGuardActive(false)
     setError(null)
     setIsConnecting(false)
     setIsConnected(false)
@@ -364,6 +367,7 @@ export const VideoStream = ({
   const onMjpegLoaded = () => {
     clearMjpegRetryTimer()
     mjpegRetryCountRef.current = 0
+    setMjpegGuardActive(false)
     setError(null)
     setIsConnected(true)
     setIsConnecting(false)
@@ -379,8 +383,14 @@ export const VideoStream = ({
     setIsConnecting(true)
     setConnectionState('connecting')
 
-    const retryDelayMs = Math.min(350 * nextAttempt, 1800)
-    setError(`MJPEG stream load failed, retrying (${nextAttempt})...`)
+    const guardMode = nextAttempt >= 4
+    const retryDelayMs = guardMode ? 5000 : Math.min(350 * nextAttempt, 1800)
+    setMjpegGuardActive(guardMode)
+    if (guardMode) {
+      setError('Camera reconnect guard active: retrying every 5s to avoid thrashing.')
+    } else {
+      setError(`MJPEG stream load failed, retrying (${nextAttempt})...`)
+    }
 
     clearMjpegRetryTimer()
     mjpegRetryTimerRef.current = setTimeout(() => {
@@ -481,6 +491,7 @@ export const VideoStream = ({
 
     if (mjpegViewers > 0) {
       clearMjpegRetryTimer()
+      setMjpegGuardActive(false)
       if (typeof error === 'string' && error.startsWith('MJPEG stream load failed')) {
         setError(null)
       }
@@ -568,6 +579,9 @@ export const VideoStream = ({
         <span className="status-text">
           {connectionState.charAt(0).toUpperCase() + connectionState.slice(1)}
         </span>
+        {mjpegGuardActive && streamMode === 'mjpeg' && (
+          <span className="stream-mode">Retry Guard (5s)</span>
+        )}
         {streamMode !== 'none' && (
           <span className="stream-mode">
             Mode: {streamMode.toUpperCase()}
