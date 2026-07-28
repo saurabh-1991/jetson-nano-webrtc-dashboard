@@ -6,13 +6,14 @@
   padding: 0.95rem;
   border-radius: 10px;
   border: 1px solid #e5e7eb;
+  width: 100%;
 }
 
 .video-wrapper {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  min-height: 420px;
+  min-height: clamp(280px, 30vw, 420px);
   max-height: 760px;
   background: #000;
   border-radius: 8px;

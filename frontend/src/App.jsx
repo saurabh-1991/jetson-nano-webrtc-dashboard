@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import VideoStream from './components/VideoStream'
+import CameraWindow from './components/CameraWindow'
 import GPIOControls from './components/GPIOControls'
 import DeviceStatus from './components/DeviceStatus'
 import SensorDataSection from './components/SensorDataSection'
@@ -81,34 +81,28 @@ function App() {
       <main className="app-main">
         <div className="dashboard-grid">
           <section className={`dashboard-section camera1-panel ${singleCameraMode ? 'camera-single' : ''}`}>
-            <h2>Camera 1 (Main)</h2>
-            {cam1Enabled ? (
-              <VideoStream
-                cameraId="cam1"
-                startLabel="Start Cam 1"
-                stopLabel="Stop Cam 1"
-              />
-            ) : (
-              <div className="camera-unavailable">Cam 1 is disabled in backend configuration.</div>
-            )}
+            <CameraWindow
+              cameraId="cam1"
+              title="Camera 1 (Main)"
+              enabled={cam1Enabled}
+              startLabel="Start Cam 1"
+              stopLabel="Stop Cam 1"
+            />
           </section>
 
           <section className={`dashboard-section camera2-panel ${singleCameraMode ? 'camera-single' : ''}`}>
-            <h2>Camera 2 (IR)</h2>
-            {cam2Enabled ? (
-              <VideoStream
-                cameraId="cam2"
-                startLabel="Start Cam 2"
-                stopLabel="Stop Cam 2"
-                forceMjpeg
-              />
-            ) : (
-              <div className="camera-unavailable">Cam 2 is disabled in backend configuration.</div>
-            )}
+            <CameraWindow
+              cameraId="cam2"
+              title="Camera 2 (IR)"
+              enabled={cam2Enabled}
+              startLabel="Start Cam 2"
+              stopLabel="Stop Cam 2"
+              forceMjpeg
+            />
           </section>
 
           <section className="dashboard-section experiment-panel full-width">
-            <ExperimentControl title="Experiment Control" showHistory showPlayback />
+            <ExperimentControl title="Experiment Control" showHistory showPlayback={false} compact />
           </section>
 
           {/* GPIO Controls Section */}

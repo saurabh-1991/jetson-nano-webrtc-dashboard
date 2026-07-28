@@ -535,7 +535,7 @@ export const ExperimentControl = ({
                         <th>Samples</th>
                         <th>Started</th>
                         <th>Download</th>
-                        <th>Recorded View</th>
+                        {showPlayback && <th>Recorded View</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -556,16 +556,18 @@ export const ExperimentControl = ({
                               Download
                             </button>
                           </td>
-                          <td>
-                            <button
-                              type="button"
-                              className="download-btn"
-                              onClick={() => handlePlayback(item.run_id)}
-                              disabled={artifactLoadingRunId === item.run_id}
-                            >
-                              {artifactLoadingRunId === item.run_id ? 'Loading…' : 'Load'}
-                            </button>
-                          </td>
+                          {showPlayback && (
+                            <td>
+                              <button
+                                type="button"
+                                className="download-btn"
+                                onClick={() => handlePlayback(item.run_id)}
+                                disabled={artifactLoadingRunId === item.run_id}
+                              >
+                                {artifactLoadingRunId === item.run_id ? 'Loading…' : 'Load'}
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>

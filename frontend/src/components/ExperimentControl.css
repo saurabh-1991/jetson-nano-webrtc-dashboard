@@ -19,11 +19,23 @@
 }
 
 .experiment-control-container.compact .control-form-grid {
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .experiment-control-container.compact .active-run-grid {
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.experiment-control-container.compact .storage-status-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem 0.7rem;
+  align-items: center;
+}
+
+.experiment-control-container.compact .storage-badge,
+.experiment-control-container.compact .storage-meta {
+  font-size: 0.8rem;
 }
 
 .experiment-control-header {
@@ -299,6 +311,15 @@
 }
 
 @media (max-width: 860px) {
+  .experiment-control-container.compact .storage-status-row {
+    grid-template-columns: 1fr;
+  }
+
+  .experiment-control-container.compact .control-form-grid,
+  .experiment-control-container.compact .active-run-grid {
+    grid-template-columns: 1fr;
+  }
+
   .control-form-grid,
   .active-run-grid {
     grid-template-columns: 1fr;
