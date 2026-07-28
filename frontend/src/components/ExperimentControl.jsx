@@ -266,6 +266,13 @@ export const ExperimentControl = ({
     try {
       setIsStarting(true)
       setError(null)
+
+      // Optimistic live-start trigger: do not block camera auto-connect on
+      // backend start API latency. This keeps Cam1/Cam2 startup responsive.
+      if (typeof onRunStarted === 'function') {
+        onRunStarted()
+      }
+
       const tagList = String(tags || '')
         .split(',')
         .map((item) => item.trim())
@@ -277,10 +284,6 @@ export const ExperimentControl = ({
         site: site || undefined,
         tags: tagList,
       })
-
-      if (typeof onRunStarted === 'function') {
-        onRunStarted()
-      }
 
       await loadData({ initial: false })
       setRunName('')

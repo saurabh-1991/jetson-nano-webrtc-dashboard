@@ -114,7 +114,7 @@ function App() {
               stopLabel="Stop Cam 2"
               forceMjpeg
               autoLiveSignal={autoLiveSignal}
-              autoConnectDelayMs={650}
+              autoConnectDelayMs={120}
             />
           </section>
 
