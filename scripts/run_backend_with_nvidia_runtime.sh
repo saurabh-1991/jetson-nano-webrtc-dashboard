@@ -15,6 +15,9 @@ NETWORK_NAME="${NETWORK_NAME:-}"
 BACKEND_NAME="jetson-nano-backend"
 BACKEND_IMAGE="jetsonnanowebrtcdashboard_jetson-backend:latest"
 COMPOSE_REBUILD="${COMPOSE_REBUILD:-false}"
+WARMUP_STRICT="${WARMUP_STRICT:-false}"
+CAM1_WARMUP_ATTEMPTS="${CAM1_WARMUP_ATTEMPTS:-4}"
+CAM2_WARMUP_ATTEMPTS="${CAM2_WARMUP_ATTEMPTS:-10}"
 
 cd "$PROJECT_DIR"
 
@@ -113,6 +116,9 @@ curl -sS http://127.0.0.1:8000/api/camera/enabled ; echo
 curl -sS "http://127.0.0.1:8000/api/camera/info?camera_id=cam1&create_if_missing=true" ; echo
 curl -sS "http://127.0.0.1:8000/api/camera/info?camera_id=cam2&create_if_missing=true" ; echo
 
+# Best-effort backend prewarm to reduce first-frame cold-start flakiness.
+curl -sS -X POST http://127.0.0.1:8000/api/camera/prewarm >/dev/null 2>&1 || true
+
 warmup_frame_check() {
   local camera_id="$1"
   local max_attempts="${2:-6}"
@@ -135,7 +141,27 @@ warmup_frame_check() {
 }
 
 echo "[nvidia-runtime] Camera frame warm-up checks:"
-warmup_frame_check cam1 4
-warmup_frame_check cam2 6
+
+cam1_warmup_ok=true
+cam2_warmup_ok=true
+
+if ! warmup_frame_check cam1 "$CAM1_WARMUP_ATTEMPTS"; then
+  cam1_warmup_ok=false
+fi
+
+if ! warmup_frame_check cam2 "$CAM2_WARMUP_ATTEMPTS"; then
+  cam2_warmup_ok=false
+fi
+
+if [[ "$WARMUP_STRICT" == "true" ]]; then
+  if [[ "$cam1_warmup_ok" != "true" || "$cam2_warmup_ok" != "true" ]]; then
+    echo "[nvidia-runtime] ERROR: warm-up strict mode enabled and one or more cameras failed warm-up"
+    exit 1
+  fi
+else
+  if [[ "$cam1_warmup_ok" != "true" || "$cam2_warmup_ok" != "true" ]]; then
+    echo "[nvidia-runtime] WARN: One or more cameras failed warm-up checks; services are up, runtime will continue with in-app recovery"
+  fi
+fi
 
 echo "[nvidia-runtime] Done."
