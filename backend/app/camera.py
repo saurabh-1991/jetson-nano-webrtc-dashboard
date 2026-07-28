@@ -163,6 +163,12 @@ class CameraCapture:
             self.usb_preflight_validate = bool(CAMERA1_USB_PREFLIGHT_VALIDATE)
         if self.camera_id == "cam2" and CAMERA2_USB_PREFLIGHT_VALIDATE is not None:
             self.usb_preflight_validate = bool(CAMERA2_USB_PREFLIGHT_VALIDATE)
+        if self.camera_id == "cam2" and self.usb_preflight_validate:
+            # Cam2 IR streams can fail gst-launch preflight negotiation even when
+            # OpenCV capture works reliably, which causes slow startups and
+            # transient "camera unavailable" states. Prefer direct open probing.
+            logger.info("Disabling GST preflight validation for cam2 to avoid false negatives")
+            self.usb_preflight_validate = False
         self.usb_hw_mode_lock = CAMERA_USB_HW_MODE_LOCK
         if self.camera_id == "cam1" and CAMERA1_USB_HW_MODE_LOCK is not None:
             self.usb_hw_mode_lock = bool(CAMERA1_USB_HW_MODE_LOCK)

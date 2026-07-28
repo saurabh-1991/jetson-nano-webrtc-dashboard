@@ -6,6 +6,7 @@ const STATUS_BASE_MS = 5000
 const STATUS_MAX_MS = 20000
 const CAMERA_BASE_MS = 1800
 const CAMERA_MAX_MS = 8000
+const CAMERA_INFO_TIMEOUT_MIN_MS = 2400
 
 function getBackoffDelay(baseMs, maxMs, failureCount) {
   const step = Math.max(0, Math.min(4, Number(failureCount || 0)))
@@ -60,9 +61,13 @@ export const DeviceStatus = () => {
       const ids = cameraIdsRef.current && cameraIdsRef.current.length > 0
         ? cameraIdsRef.current
         : ['cam1']
+      const cameraInfoTimeoutMs = Math.max(
+        CAMERA_INFO_TIMEOUT_MIN_MS,
+        getBackoffDelay(CAMERA_BASE_MS, CAMERA_MAX_MS, cameraFailuresRef.current)
+      )
 
       const responses = await Promise.allSettled(
-        ids.map((id) => cameraAPI.getInfo(id, { timeout: 1800 }))
+        ids.map((id) => cameraAPI.getInfo(id, { timeout: cameraInfoTimeoutMs }))
       )
 
       setCameras((prev) => {
