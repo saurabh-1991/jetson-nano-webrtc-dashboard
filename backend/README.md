@@ -113,19 +113,54 @@ Key settings:
 - `CAMERA_SOURCE` — `usb` or `csi`
 - `CAMERA_ACCELERATION` — `auto` (default, hardware-first), `hardware`, or `compat`
 - `CAMERA_USB_STARTUP_PROBE` — enable startup probing/reordering for USB candidates (`true`/`false`)
+- `CAMERA_RECOVERY_BASE_BACKOFF_SECONDS` — base delay for exponential camera recover retries (default `2.0`)
+- `CAMERA_RECOVERY_BACKOFF_MAX_SECONDS` — max delay cap for camera recover retries (default `30.0`)
+- `CAMERA_RECOVERY_MIN_REINIT_INTERVAL_SECONDS` — minimum interval between reinitialize attempts (default `0.75`)
 - `CAMERA_CSI_SENSOR_ID` — CSI sensor index used by `nvarguscamerasrc`
+- `CAMERA_H264_STREAM_ENCODER_PREFERENCE` — ordered FFmpeg encoder list for `/api/camera/stream_h264` (default `h264_v4l2m2m,h264_omx,h264_nvmpi,libx264`)
+- `CAMERA_H264_STREAM_USE_GSTREAMER` — prefer GStreamer USB→NVMM→`nvv4l2h264enc` path for `/api/camera/stream_h264` when plugins are available
+- `CAMERA_H264_INPUT_MODE` — H264 ingest mode for `/api/camera/stream_h264`: `usb` (default), `rtsp`, or `file`
+- `CAMERA_H264_RTSP_URL` — RTSP URL used when `CAMERA_H264_INPUT_MODE=rtsp`
+- `CAMERA_H264_RTSP_LATENCY_MS` — `rtspsrc` latency value (default `80`) when in RTSP mode
+- `CAMERA_H264_RTSP_PROTOCOLS` — RTSP transport preference (`tcp` default, or `udp`)
+- `CAMERA_H264_FILE_PATH` — local file path used when `CAMERA_H264_INPUT_MODE=file`
+- `CAMERA_H264_GST_INPUT_FORMAT` — raw USB input format for GStreamer H264 path (default `YUY2`; match `v4l2-ctl --list-formats-ext`)
+- `CAMERA_H264_GST_FRAGMENT_MS` — fragmented MP4 mux fragment duration in milliseconds for H264 live path (default `250`)
+- `CAMERA_H264_GST_MAXPERF_ENABLE` — enable `nvv4l2h264enc maxperf-enable` for H264 live path (default `true`)
 - `GST_PIPELINE_OVERRIDE` — full custom GStreamer capture pipeline override
 - `CUDA_ENABLED` — enable/disable CUDA processing
 - `PROCESSING_SCALE` — resize dimensions for frame processing
 - `GPIO_LED_PIN`, `GPIO_BUTTON_PIN`
 - `API_HOST`, `API_PORT`
 - `STUN_SERVERS` — used by WebRTC
+- `MEDIA_WEBRTC_GATEWAY_ENABLED` — toggles optional external gateway profile exposure to frontend (`false` by default)
+- `MEDIA_WEBRTC_GATEWAY_WHEP_TEMPLATE` — optional WHEP URL template, e.g. `http://jetson-mediamtx:8889/{camera_id}/whep`
+- `MEDIA_WEBRTC_GATEWAY_CAM1_WHEP_URL`, `MEDIA_WEBRTC_GATEWAY_CAM2_WHEP_URL` — optional per-camera WHEP override URLs
 - `EXPERIMENTS_STORAGE_PREFERRED_DIR` — preferred storage root (default `/mnt/usb_recordings`)
 - `EXPERIMENTS_STORAGE_FALLBACK_DIR` — fallback storage root (default `/tmp/jetson_dashboard_recordings`)
 - `EXPERIMENTS_ROOT_DIR` — optional alternate root for run discovery
 - `EXPERIMENTS_SENSOR_INTERVAL_SECONDS` — sensor CSV sampling interval
 - `EXPERIMENTS_MANIFEST_FLUSH_SECONDS` — periodic manifest flush interval
 - `EXPERIMENTS_MAX_HISTORY` — max history items returned by API
+
+### Jetson Nano browser-streaming reference profile (RTSP gateway)
+
+Modern browsers do **not** natively play `rtsp://` URLs. Keep RTSP on the backend and expose browser-compatible outputs:
+
+- Backend ingest: `CAMERA_H264_INPUT_MODE=rtsp` + `CAMERA_H264_RTSP_URL=rtsp://...`
+- Browser delivery: `/api/camera/stream_h264` (fragmented MP4 H.264), WebRTC (`/api/webrtc/offer` when available), or MJPEG fallback (`/api/camera/stream`)
+
+Recommended low-latency order for live view:
+
+1. H.264 live path (`/api/camera/stream_h264`)
+2. WebRTC path (if available on target build)
+3. MJPEG fallback for continuity
+
+This architecture follows browser protocol constraints while preserving Jetson-side NVIDIA acceleration for ingest/decode/encode.
+
+Operator verification tip:
+
+- Call `GET /api/stats` and inspect `h264_stream_profile` to confirm active ingest mode (`usb|rtsp|file`) and whether RTSP/file source inputs are configured.
 
 ## Run the Backend
 
@@ -185,8 +220,10 @@ Slice A scope currently focuses on control plane + sensor evidence writing (vide
 - `GET /api/camera/enabled` — enabled logical camera IDs and routing policy
 - `GET /api/camera/devices/probe` — `/dev/video*` + format probe diagnostics
 - `GET /api/camera/info?camera_id=cam1|cam2` — camera state/runtime diagnostics
+  - includes `media_gateway` payload when gateway profile is configured
 - `GET /api/camera/frame?camera_id=cam1|cam2` — single JPEG frame response
 - `GET /api/camera/stream?camera_id=cam1|cam2&sid=<session>` — MJPEG stream
+- `GET /api/camera/stream_h264?camera_id=cam1|cam2&sid=<session>` — fragmented MP4 H264 stream (supports `usb`, `rtsp`, `file` ingest modes)
 - `POST /api/camera/stop` — optional per-session stop/release request
 - `POST /api/camera/recover` — manual force recover/reinitialize
 
@@ -340,6 +377,9 @@ gst-inspect-1.0 | grep nv
 ```bash
 ls /dev/video*
 gst-launch-1.0 v4l2src device=/dev/video0 ! videoconvert ! xvimagesink
+
+# USB webcam -> NVMM -> nvv4l2h264enc -> MP4 file (test pattern/save-to-file)
+# (script located at repository root: scripts/test_usb_nvmm_h264_record.sh)
 ```
 
 ## JetPack 4.6 (Jetson Nano) build using Dockerfile.jetpack46

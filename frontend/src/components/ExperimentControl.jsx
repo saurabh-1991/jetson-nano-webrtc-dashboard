@@ -1,14 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { cameraAPI, experimentsAPI } from '../services/api'
+import { getApiCooldownState } from '../services/api'
 import './ExperimentControl.css'
 
 const EXPERIMENT_REQUEST_TIMEOUT_MS = 9000
 
 function getNextPollDelayMs({ failedCount, totalCount, failureStreak }) {
-  if (failedCount <= 0) return 3000
-  if (failedCount < totalCount) return 7000
+  if (failedCount <= 0) return 6000
+  if (failedCount < totalCount) return 10000
   const streak = Math.max(1, Number(failureStreak || 1))
-  return Math.min(20000, 9000 + (streak * 1500))
+  return Math.min(30000, 12000 + (streak * 2000))
 }
 
 function formatTimestamp(value) {
@@ -122,6 +123,17 @@ export const ExperimentControl = ({
       return { failedCount: 0, totalCount: 0, failureStreak: consecutiveFailures, skipped: true }
     }
 
+    const cooldown = getApiCooldownState()
+    if (cooldown.active) {
+      return {
+        failedCount: 4,
+        totalCount: 4,
+        failureStreak: Math.max(1, Number(consecutiveFailures || 0)),
+        skipped: true,
+        cooldownRemainingMs: cooldown.remainingMs,
+      }
+    }
+
     try {
       refreshInFlightRef.current = true
       if (initial) {
@@ -212,7 +224,7 @@ export const ExperimentControl = ({
       if (!mounted) return
 
       const delay = result?.skipped
-        ? 3000
+        ? Math.max(3000, Number(result?.cooldownRemainingMs || 0) + 300)
         : getNextPollDelayMs({
           failedCount: result?.failedCount ?? 0,
           totalCount: result?.totalCount ?? 4,
@@ -224,7 +236,7 @@ export const ExperimentControl = ({
 
     loadData({ initial: true }).then(() => {
       if (mounted) {
-        timer = setTimeout(tick, 3000)
+        timer = setTimeout(tick, 6000)
       }
     })
 

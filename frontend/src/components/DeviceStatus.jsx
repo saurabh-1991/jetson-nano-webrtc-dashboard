@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { cameraAPI, systemAPI } from '../services/api'
+import { getApiCooldownState } from '../services/api'
+import { shouldThrottleClientNoise } from '../services/api'
 import './DeviceStatus.css'
 
-const STATUS_BASE_MS = 5000
-const STATUS_MAX_MS = 20000
-const CAMERA_BASE_MS = 1800
-const CAMERA_MAX_MS = 8000
-const CAMERA_INFO_TIMEOUT_MIN_MS = 2400
+const STATUS_BASE_MS = 7000
+const STATUS_MAX_MS = 25000
+const CAMERA_BASE_MS = 5000
+const CAMERA_MAX_MS = 20000
+const CAMERA_INFO_TIMEOUT_MIN_MS = 4500
 
 function getBackoffDelay(baseMs, maxMs, failureCount) {
   const step = Math.max(0, Math.min(4, Number(failureCount || 0)))
@@ -31,6 +33,11 @@ export const DeviceStatus = () => {
   const cameraFailuresRef = useRef(0)
 
   const fetchStatus = async () => {
+    const cooldown = getApiCooldownState()
+    if (cooldown.active) {
+      return false
+    }
+
     try {
       setIsRefreshing(true)
       const response = await systemAPI.getStatus()
@@ -45,10 +52,18 @@ export const DeviceStatus = () => {
       setError(null)
       return true
     } catch (err) {
-      console.error('Failed to fetch device status:', err)
+      if (!shouldThrottleClientNoise('device_status_fetch_failed')) {
+        console.error('Failed to fetch device status:', err)
+      }
       statusFailuresRef.current += 1
       setStatusFailures(statusFailuresRef.current)
-      setError((prev) => prev || 'Connection unstable. Showing last known status and retrying.')
+      setError((prev) => {
+        if (status) {
+          // Keep stale status visible and rely on warning banner instead of hard error card.
+          return null
+        }
+        return prev || 'Waiting for device status… network unstable, retrying.'
+      })
       return false
     } finally {
       setIsRefreshing(false)
@@ -57,6 +72,11 @@ export const DeviceStatus = () => {
   }
 
   const fetchCameras = async () => {
+    const cooldown = getApiCooldownState()
+    if (cooldown.active) {
+      return false
+    }
+
     try {
       const ids = cameraIdsRef.current && cameraIdsRef.current.length > 0
         ? cameraIdsRef.current
@@ -108,6 +128,12 @@ export const DeviceStatus = () => {
     const scheduleStatus = (delayMs = STATUS_BASE_MS) => {
       if (!mounted) return
       statusTimer = setTimeout(async () => {
+        const cooldown = getApiCooldownState()
+        if (cooldown.active) {
+          scheduleStatus(Math.max(STATUS_BASE_MS, cooldown.remainingMs + 300))
+          return
+        }
+
         if (!statusInFlight) {
           statusInFlight = true
           const ok = await fetchStatus()
@@ -125,6 +151,12 @@ export const DeviceStatus = () => {
     const scheduleCamera = (delayMs = CAMERA_BASE_MS) => {
       if (!mounted) return
       cameraTimer = setTimeout(async () => {
+        const cooldown = getApiCooldownState()
+        if (cooldown.active) {
+          scheduleCamera(Math.max(CAMERA_BASE_MS, cooldown.remainingMs + 300))
+          return
+        }
+
         if (!cameraInFlight) {
           cameraInFlight = true
           setIsCameraRefreshing(true)
@@ -178,7 +210,9 @@ export const DeviceStatus = () => {
       }))
       await Promise.all([fetchStatus(), fetchCameras()])
     } catch (recoverError) {
-      console.error('Failed to recover camera:', recoverError)
+      if (!shouldThrottleClientNoise(`recover_camera_failed_${cameraId}`)) {
+        console.error('Failed to recover camera:', recoverError)
+      }
       setRecoverMessage((prev) => ({ ...prev, [cameraId]: 'Camera recovery request failed.' }))
     } finally {
       setIsRecoveringCamera((prev) => ({ ...prev, [cameraId]: false }))
@@ -188,11 +222,11 @@ export const DeviceStatus = () => {
     }
   }
 
-  if (loading) {
+  if (loading && !status) {
     return <div className="device-status-container">Loading...</div>
   }
 
-  if (error) {
+  if (!status) {
     return <div className="device-status-container error">{error}</div>
   }
 
@@ -204,7 +238,7 @@ export const DeviceStatus = () => {
 
   const cameraEntries = cameraIds.map((id) => ({ id, label: getCameraLabel(id) }))
 
-  const cameraStatusFresh = cameraLastUpdatedAt > 0 && (Date.now() - cameraLastUpdatedAt) <= 3500
+  const cameraStatusFresh = cameraLastUpdatedAt > 0 && (Date.now() - cameraLastUpdatedAt) <= 9000
   const hasDegradedSync = statusFailures >= 2 || cameraFailures >= 3
 
   return (

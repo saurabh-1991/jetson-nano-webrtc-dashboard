@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { sensorAPI } from '../services/api'
+import { getApiCooldownState } from '../services/api'
+import { shouldThrottleClientNoise } from '../services/api'
 import ToggleSwitch from './ToggleSwitch'
 import './SensorDataSection.css'
 
@@ -23,7 +25,7 @@ const HISTORY_RANGE_OPTIONS = [
   { value: 48, label: 'Last 48h' },
 ]
 
-const SENSOR_POLL_BASE_MS = 2000
+const SENSOR_POLL_BASE_MS = 5000
 const SENSOR_POLL_MAX_MS = 15000
 const HISTORY_REFRESH_MS = 10000
 
@@ -90,6 +92,15 @@ export const SensorDataSection = () => {
     }
 
     const fetchSensorData = async () => {
+      const cooldown = getApiCooldownState()
+      if (cooldown.active) {
+        const deferredMs = Math.max(SENSOR_POLL_BASE_MS, cooldown.remainingMs + 300)
+        setRetryDelayMs(deferredMs)
+        setError(`Network/back-end recovering (retrying in ${Math.ceil(deferredMs / 1000)}s)`)
+        scheduleNextPoll(deferredMs)
+        return
+      }
+
       try {
         const latestResponse = await sensorAPI.getLatest()
 
@@ -133,7 +144,7 @@ export const SensorDataSection = () => {
         if (!mounted) return
         const retryMs = getRetryDelayMs(failureCount)
 
-        if (failureCount === 0 || failureCount % 5 === 0) {
+        if ((failureCount === 0 || failureCount % 5 === 0) && !shouldThrottleClientNoise('sensor_poll_retry_warning')) {
           console.warn('Sensor polling retry due to transient error:', err?.message || err)
         }
 
@@ -217,7 +228,9 @@ export const SensorDataSection = () => {
       setHistory([])
       setError(null)
     } catch (err) {
-      console.error('Failed to update simulation mode:', err)
+      if (!shouldThrottleClientNoise('sensor_simulation_toggle_failed')) {
+        console.error('Failed to update simulation mode:', err)
+      }
       setError('Unable to switch simulation mode')
     } finally {
       setIsUpdatingSimulation(false)

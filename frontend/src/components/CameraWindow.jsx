@@ -195,6 +195,7 @@ export default function CameraWindow({
             startLabel={startLabel}
             stopLabel={stopLabel}
             forceMjpeg={forceMjpeg}
+            preferHardwareH264={!forceMjpeg}
             autoConnectSignal={autoLiveSignal}
             autoConnectDelayMs={autoConnectDelayMs}
           />

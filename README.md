@@ -1,560 +1,103 @@
-# Jetson Nano Real-time Web Dashboard
-
-Complete web-based application for real-time video streaming from Jetson Nano USB webcam to laptop browser with GPIO controls.
-
-## 📋 Overview
-
-This project creates a production-ready dashboard for:
-- **Real-time video streaming** via WebRTC from Jetson Nano
-- **GPIO control** for hardware components (LEDs, relays, etc.)
-- **Device monitoring** with system status and health checks
-- **Low-latency streaming** optimized for edge computing
-
-## 🏗️ Architecture
-
-```
-Jetson Nano (Backend)              Laptop/Browser (Frontend)
-├─ USB Webcam                     ├─ React Dashboard
-├─ GStreamer Pipeline             ├─ Video Stream (WebRTC)
-├─ OpenCV CUDA                    ├─ GPIO Controls
-├─ FastAPI Server                 └─ Device Status
-├─ GPIO Control                   
-└─ WebRTC/WebSocket               
-```
-
-## 📸 Working Screenshots
-
-### Live Video + Viewer Metrics
-
-![Dashboard Live Video](Doc/screenshots/dashboard-live-video.png)
-
-### Operations View (v1.2.0)
-
-![Dashboard Operations v1.2.0](Doc/screenshots/dashboard-v1.2.0-ops.png)
-
-## ⚙️ Tech Stack
-
-### Backend (Jetson Nano)
-- **FastAPI** - REST API framework
-- **Uvicorn** - ASGI server
-- **GStreamer** - Hardware video decoding
-- **OpenCV CUDA** - GPU image processing
-- **aiortc** - WebRTC support
-- **Jetson.GPIO** - GPIO control
-- **Docker** - Containerization
-
-### Frontend
-- **React 18** - UI framework
-- **Vite** - Build tool
-- **Axios** - HTTP client
-- **Tailwind CSS** - Styling (via custom CSS)
-- **WebRTC** - Video streaming
-- **WebSocket** - Real-time updates
-
-## 📁 Project Structure
-
-```
-JetsonNano/POC_Project_1/
-├── backend/
-│   ├── app/
-│   │   ├── main.py              # FastAPI application
-│   │   ├── camera.py            # GStreamer + OpenCV
-│   │   ├── gpio_control.py      # GPIO management
-│   │   ├── webrtc.py            # WebRTC streaming
-│   │   ├── websocket.py         # WebSocket handlers
-│   │   └── config.py            # Configuration
-│   ├── requirements.txt          # Python dependencies
-│   ├── Dockerfile               # Backend container
-│   └── README.md                # Backend docs
-│
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── VideoStream.jsx  # Video display
-│   │   │   ├── GPIOControls.jsx # GPIO buttons
-│   │   │   ├── DeviceStatus.jsx # Status display
-│   │   │   └── *.css            # Styling
-│   │   ├── services/
-│   │   │   ├── api.js           # API client
-│   │   │   └── webrtc.js        # WebRTC service
-│   │   ├── App.jsx              # Main app
-│   │   └── main.jsx             # Entry point
-│   ├── package.json             # Dependencies
-│   ├── vite.config.js           # Vite config
-│   ├── Dockerfile               # Frontend container
-│   ├── nginx.conf               # Nginx config
-│   └── README.md                # Frontend docs
-│
-├── docker-compose.yml           # Multi-container setup
-├── DEPLOYMENT.md                # Deployment instructions
-└── Doc/
-    └── jetson_nano_realtime_web_dashboard_architecture.md
-```
-
-## 📘 Deployment Guide
-
-For detailed Jetson Nano deployment steps, including both Docker Compose and native installation, see `DEPLOYMENT.md`.
-
-## 🧭 Branch and release guidance
-
-- Current production/validated code branch: `poc_demo_v1.3.0`
-- Documentation baseline + next development starting point: `poc_demo_v1.4.0`
-- Earlier deployment baselines: `poc_demo_v1.2.0`, `poc_demo_v1.1.0`, `poc_demo_v1.0.0`
-
-Recommended branch sync on Jetson:
-
-```bash
-cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
-git fetch origin
-git checkout -B poc_demo_v1.3.0 origin/poc_demo_v1.3.0
-git reset --hard origin/poc_demo_v1.3.0
-```
-
-## 🆕 What’s included in `poc_demo_v1.4.0`
-
-- Documentation-only release for handoff and planning.
-- Consolidates deployment/docs/readme updates after code validation in `poc_demo_v1.3.0`.
-- Sets the starting point for next development phase:
-  - video storing pipeline implementation
-  - experiment start/stop workflow implementation
-  - UI + API evolution for experiment lifecycle
-
-## 🆕 What’s included in `poc_demo_v1.3.0`
-
-- Dual-camera-first operation retained as the default dashboard behavior (`cam1`, `cam2`)
-- Canonical JP4.6 accelerated backend flow consolidated to:
-  - `backend/Dockerfile.jetpack46`
-  - `scripts/run_backend_with_nvidia_runtime.sh`
-- Frontend reliability updates for stream continuity:
-  - faster MJPEG reconnect attempts
-  - stale stream error clearing after successful resume
-- Backend low-latency tuning updates for smoother motion handling:
-  - direct V4L2 tuning path and reduced frame flush defaults
-- Deployment hygiene improvements:
-  - duplicate hardware-trial files removed to avoid operator confusion
-- Camera reliability + fail-safe hardening:
-  - automatic alternate `/dev/video*` fallback when default device cannot open
-  - consecutive frame-read failure detection with controlled camera cycle
-  - adaptive/exponential recovery backoff to prevent retry storms
-- Manual operator recovery control:
-  - `POST /api/camera/recover` to force a clean camera reinitialize
-  - tiny `Reset Camera` button in dashboard with active-stream confirmation prompt
-- Better troubleshooting + operational visibility:
-  - camera health badge (`Healthy` / `Recovered` / `Degraded`)
-  - active camera device display (example: `/dev/video1`)
-  - recovery counters and last-recovery reason in status card
-- Extended rolling diagnostics:
-  - backend/frontend event logging with retention and safety watchdog hooks
-
-## 🔁 Production resilience checks (power/network/deployment)
-
-Recommended checks after each deployment or site power/network event:
-
-1. **Auto-start after reboot/power loss**
-   - Ensure docker and dashboard service are enabled on target:
-     - `systemctl is-enabled docker`
-     - `systemctl status jetson-dashboard.service --no-pager`
-   - Verify containers auto-restart policy is `unless-stopped`.
-
-2. **Network reachability after boot**
-   - Validate local health:
-     - `curl http://127.0.0.1:8000/health`
-   - Validate LAN access from remote laptop:
-     - `http://<jetson-ip>/`
-     - `http://<mdns-hostname>.local/` (if enabled)
-
-3. **Remote deployment continuity**
-   - From remote host: `git fetch`, `checkout/reset` target branch, `docker-compose up -d --build`
-   - Validate: `docker-compose ps` and dashboard open in browser.
-
-4. **Camera fail-safe operation**
-   - Start stream and confirm fallback to MJPEG when WebRTC is unavailable.
-   - If camera stalls, use `Reset Camera` and confirm stream recovers.
-
-## 🆕 What’s included in `poc_demo_v1.1.0`
-
-- Multi-viewer streaming stability improvements:
-  - shared frame/JPEG caching path for MJPEG efficiency
-  - session-based MJPEG viewer tracking for accurate live counts
-- Camera stop/release reliability:
-  - `POST /api/camera/stop` now supports per-session unregister
-  - idle watchdog auto-releases camera when no active viewers remain
-- Observability enhancements:
-  - `/api/stats` now includes active viewers and camera performance metrics
-  - camera UI displays live viewer and cache/encode badges
-- Power-run automation:
-  - `scripts/setup_powerrun_jetson.sh` (autologin + systemd startup)
-  - `scripts/configure_static_ip_nmcli.sh` (static Ethernet/Wi-Fi)
-  - `scripts/powerrun_apply_all.sh` (one-command orchestrator)
-  - `scripts/powerrun.config` (user-editable custom IP/boot config)
-  - `scripts/check_lan_access.sh` (one-command LAN diagnostics and recommended URL output)
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Jetson Nano with JetPack installed
-- CUDA and cuDNN
-- GStreamer 1.0+
-- Docker & Docker Compose (optional)
-- USB webcam connected to Jetson Nano
-
-### Option 1: Direct Installation
-
-#### Backend Setup
-```bash
-cd backend
-
-# JetPack 4.6 native path (recommended on Jetson)
-python3 -m venv --system-site-packages .venv-jp46
-source .venv-jp46/bin/activate
-pip3 install -r requirements.jetpack46.txt
-
-# (For non-JetPack/local modern Python, use requirements.txt instead)
-# pip3 install -r requirements.txt
-
-# Optional camera source switch: usb (default) | csi
-export CAMERA_SOURCE=usb
+# Jetson Nano WebRTC Dashboard
 
-# Pipeline mode: auto (default, HW-first), hardware (force HW-first), compat (CPU decode)
-export CAMERA_ACCELERATION=hardware
+Real-time dual-camera dashboard for Jetson Nano with low-latency browser streaming, GPIO control, and field-friendly deployment automation.
 
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
+## Current branch scope
 
-#### Frontend Setup
-```bash
-cd frontend
-npm install
-npm run dev
-```
+This branch is focused on:
 
-Access dashboard at: `http://localhost:5173`
+- stable dual-camera runtime behavior (`cam1`, `cam2`)
+- JetPack 4.6 deployment reliability
+- documentation cleanup and operator/developer runbooks
+- storage architecture planning (documented, not yet implemented)
 
-### Option 2: Docker Compose
-```bash
-docker-compose up -d
-```
+## What you get
 
-- Backend: `http://localhost:8000`
-- Frontend: `http://localhost:80`
-- API: `http://localhost:8000/api`
+- **Live video pipeline** with fallback strategy:
+  - H264 stream endpoint
+  - WebRTC path
+  - MJPEG fallback
+- **GPIO control APIs** for hardware toggles
+- **Runtime observability** via health/stats/camera diagnostics endpoints
+- **Jetson deployment scripts** for:
+  - auto-start on boot
+  - LAN/static-IP setup
+  - runtime `nvidia` backend launch workaround for older compose setups
 
-## 🔌 Plug-and-play power-run setup (recommended on Jetson)
+## Architecture at a glance
 
-If your requirement is:
+- **Backend**: FastAPI + Uvicorn + camera/GStreamer/OpenCV integration
+- **Frontend**: React + Vite + Nginx container
+- **Runtime**: Docker Compose (default) with optional backend replacement script for `--runtime nvidia`
 
-1. auto-login on boot,
-2. auto-start frontend+backend after power-on,
-3. fixed LAN IP for predictable URL,
+Main services in `docker-compose.yml`:
 
-then use this flow.
+- `jetson-backend` → container `jetson-nano-backend` (port `8000`)
+- `jetson-frontend` → container `jetson-nano-frontend` (port `80`)
+- `docker-prune` (optional automatic cleanup)
 
-### Step 1 — Edit your board/network config once
+## Quick start
 
-File: `scripts/powerrun.config`
+### Option A — Docker Compose (recommended)
 
-Main values to customize:
+1. Copy and adjust env values from `.env.example`.
+2. Start stack:
 
-- `AUTOLOGIN_USER`
-- `ENABLE_ROOT_ACCOUNT`, `ROOT_PASSWORD`
-- `ENABLE_MDNS`, `MDNS_HOSTNAME`
-- `ETH_IP`, `ETH_GATEWAY`, `ETH_DNS`
-- `WIFI_SSID`, `WIFI_PASSWORD`, `WIFI_IP`, `WIFI_GATEWAY`, `WIFI_DNS`
+   - `docker-compose up -d --build` (first run or after Dockerfile/dependency changes)
+   - `docker-compose up -d` (normal daily start)
 
-### Step 2 — Apply all automation in one command
+3. Open:
 
-```bash
-cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
-chmod +x scripts/powerrun_apply_all.sh scripts/setup_powerrun_jetson.sh scripts/configure_static_ip_nmcli.sh
+   - Dashboard: `http://<jetson-ip>/`
+   - API health: `http://<jetson-ip>:8000/health`
 
-# Edit your custom values
-nano scripts/powerrun.config
+### Option B — Compose + explicit NVIDIA runtime backend
 
-# Apply autologin + startup service + static IP
-sudo ./scripts/powerrun_apply_all.sh
-```
+On older Jetson compose versions where YAML runtime support is limited:
 
-### Step 3 — Reboot and validate
+- run `scripts/run_backend_with_nvidia_runtime.sh`
 
-```bash
-systemctl status jetson-dashboard.service --no-pager
-docker-compose ps
-curl http://127.0.0.1:8000/health
-```
+This keeps compose-managed networking and replaces only backend with `--runtime nvidia`.
 
-From another device on LAN, open:
+### Option C — Native backend (JP4.6 validation/debug)
 
-- `http://<YOUR_STATIC_IP>/`
-- `http://<MDNS_HOSTNAME>.local/` (recommended when IP may change)
+From `backend/`:
 
-### No-IP access in local LAN (recommended for remote sites)
+- `scripts/setup_jetpack46_native.sh`
+- `scripts/run_jetpack46_native.sh`
 
-Power-run now enables mDNS by default, so clients can open a stable hostname instead of tracking DHCP IP changes:
+Frontend can still run from `frontend/` with `npm run dev` for development.
 
-- Default URL: `http://jetson-dashboard.local/`
-- Change hostname in `scripts/powerrun.config`:
-  - `ENABLE_MDNS="true"`
-  - `MDNS_HOSTNAME="jetson-dashboard"`
+## Key endpoints
 
-Windows note: if `.local` does not resolve, install Bonjour services (or use static IP fallback).
+- `GET /health`
+- `GET /api/system/status`
+- `GET /api/stats`
+- `GET /api/camera/info`
+- `GET /api/camera/stream` (MJPEG)
+- `GET /api/camera/stream_h264`
+- `POST /api/camera/recover`
 
-### Quick LAN diagnostics on Jetson
+## Project layout
 
-Run this from Jetson host to print interface/IP state, service health, and recommended operator URLs:
+- `backend/` — API, camera runtime, GPIO, config
+- `frontend/` — dashboard UI
+- `scripts/` — deployment/operations automation
+- `Doc/` — architecture, operator cards, UAT, storage blueprint
 
-```bash
-cd /home/saurabh/Saurabh/Jetson_Nano_WebRTC_POC/jetson-nano-webrtc-dashboard
-bash ./scripts/check_lan_access.sh
-```
+## Documentation index
 
-### Remote connection in local LAN (recommended workflow)
+- `DEVELOPMENT.md` — contributor workflow and local testing
+- `DEPLOYMENT.md` — Jetson field deployment runbook
+- `Doc/jetson_nano_realtime_web_dashboard_architecture.md` — architecture reference
+- `Doc/software-architecture-and-application-flow-v1.0.0.md` — Mermaid diagrams: deployment architecture, software architecture, and runtime flow
+- `Doc/scalable-experiment-recording-architecture-v1.4.0.md` — recording architecture plan
+- `Doc/production-video-storage-blueprint-v1.0.0.md` — production storage blueprint (new)
+- `Doc/new-local-network-deployment.md` — first-time LAN setup guide
+- `Doc/operator-quick-card-v1.2.0.md` — operator quick commands
 
-Use this sequence for remote/local deployments where Jetson IP may change after reboot.
+## Notes
 
-On Jetson (one-time setup), configure `scripts/powerrun.config`, then run:
-
-```bash
-sudo ./scripts/powerrun_apply_all.sh
-```
-
-After reboot, run:
-
-```bash
-bash ./scripts/check_lan_access.sh
-```
-
-Use the printed URLs from another laptop/phone on the same LAN:
-
-- Primary: `http://<hostname>.local/`
-- Fallback: `http://<ipv4>/`
-
-For remote shell, prefer SSH by IPv4 if `.local` SSH is blocked in your LAN stack.
-
-Quick checks from laptop:
-
-```bash
-curl -sS http://jetson-dashboard.local/api/system/status
-curl -sS http://<JETSON_IPV4>/api/system/status
-```
-
-Windows notes:
-
-- Install Bonjour services if `.local` resolution is missing.
-- In some networks, HTTP works via `.local` while SSH to `.local` may fail; in that case use IPv4 for SSH and keep `.local` for browser access.
-
-## 📈 Runtime metrics and endpoints
-
-Useful endpoints after deployment:
-
-- `GET /api/stats` — viewer counts + camera perf metrics
-- `GET /api/camera/info` — pipeline/runtime diagnostics
-- `POST /api/camera/stop` — explicit stop/release request (with optional `stream_session_id`)
-- `POST /api/camera/recover` — manual camera recover/reinitialize action for operators
-
-## 📱 Features
-
-### ✅ Live Video Streaming
-- WebRTC for low-latency (30-120ms) streaming
-- Hardware-accelerated video decoding
-- MJPEG fallback option
-- Automatic reconnection
-
-### ✅ GPIO Control
-- Turn LED on/off via REST API
-- Toggle functionality
-- Real-time status updates
-- WebSocket notifications
-
-### ✅ Device Monitoring
-- Camera status and frame count
-- CUDA GPU availability
-- GPIO status
-- WebSocket connections
-- System health checks
-
-### ✅ Performance Optimized
-- GStreamer hardware decoding (nvjpegdec)
-- NVIDIA raw-YUV hardware conversion (v4l2src + nvvidconv)
-- NVIDIA CUDA processing
-- GPU memory management
-- Async/await architecture
-- Frame dropping for latency
-
-### ✅ NVIDIA-Reference Pipeline Strategy
-- CSI path uses `nvarguscamerasrc` (ARGUS/ISP flow)
-- USB MJPEG path prefers `v4l2src ! jpegparse ! nvjpegdec ! nvvidconv`
-- USB raw-YUV path falls back to `v4l2src ! ... UYVY|YUY2 ... ! nvvidconv`
-- Compatibility mode retains software fallback (`jpegdec`/`videoconvert`)
-
-## 🔌 API Endpoints
-
-### System
-- `GET /` - Health check
-- `GET /health` - Detailed status
-- `GET /api/system/info` - System info
-- `GET /api/system/status` - Full status
-
-### Camera
-- `GET /api/camera/info` - Camera details
-- `GET /api/camera/frame` - Single frame
-- `GET /api/camera/stream` - MJPEG stream
-
-### GPIO
-- `GET /api/gpio/status` - GPIO state
-- `POST /api/gpio/on` - Turn LED on
-- `POST /api/gpio/off` - Turn LED off
-- `POST /api/gpio/toggle` - Toggle LED
-
-### WebRTC
-- `POST /api/webrtc/offer` - Establish connection
-
-### WebSocket
-- `WS /ws` - Real-time events
-
-## ⚙️ Configuration
-
-Edit `backend/app/config.py`:
-
-```python
-CAMERA_DEVICE = "/dev/video0"      # Camera device
-CAMERA_WIDTH = 1280                 # Resolution
-CAMERA_HEIGHT = 720
-CAMERA_FPS = 30
-CAMERA_SOURCE = "usb"               # usb | csi
-CAMERA_ACCELERATION = "auto"        # auto | hardware | compat
-CAMERA_CSI_SENSOR_ID = 0             # CSI sensor-id for nvarguscamerasrc
-
-GPIO_LED_PIN = 12                   # GPIO pin for LED
-STUN_SERVERS = [...]                # WebRTC STUN servers
-```
-
-## 📊 Performance
-
-### Expected Metrics
-- Frame rate: 30 FPS
-- Video latency: 30-120ms (WebRTC)
-- API response: <50ms
-- Memory: 200-400MB
-- CPU usage: 15-25%
-- GPU usage: 20-40%
-
-### Bandwidth
-- 720p @ 30fps: ~2-4 Mbps
-- Optimized for home networks
-
-## 🔧 Troubleshooting
-
-### Camera Issues
-```bash
-# List cameras
-ls /dev/video*
-
-# Test GStreamer
-gst-launch-1.0 v4l2src device=/dev/video0 ! xvimagesink
-```
-
-### CUDA Issues
-```bash
-# Check CUDA availability
-python3 -c "import cv2; print(cv2.cuda.getCudaEnabledDeviceCount())"
-
-# Monitor GPU
-tegrastats
-```
-
-### GPIO Permission
-```bash
-# Add user to gpio group
-sudo usermod -a -G gpio $USER
-```
-
-### WebRTC Connection
-- Check firewall settings
-- Verify STUN server connectivity
-- Check browser WebRTC console logs
-- Ensure backend is running
-
-## 🔐 Security
-
-For production:
-- [ ] Enable HTTPS/SSL
-- [ ] Add JWT authentication
-- [ ] Implement rate limiting
-- [ ] Configure CORS properly
-- [ ] Use environment variables
-- [ ] Enable firewall rules
-- [ ] Regular security updates
-
-## 📈 Future Enhancements
-
-### AI Features
-- YOLO object detection
-- Face detection
-- Motion detection
-- People counting
-- Gesture recognition
-
-### Hardware
-- Multi-camera support
-- Additional GPIO pins
-- Relay control
-- Temperature sensors
-- Network optimization
-
-### Features
-- Role-based access control
-- Recording to disk
-- Cloud streaming
-- Mobile app
-- Dashboard customization
-
-## 📚 Documentation
-
-- [Backend README](backend/README.md) - Backend details
-- [Frontend README](frontend/README.md) - Frontend details
-- [Architecture Doc](Doc/jetson_nano_realtime_web_dashboard_architecture.md) - Full architecture
-- [Scalable Experiment Recording Architecture v1.4.0](Doc/scalable-experiment-recording-architecture-v1.4.0.md) - Dual-camera recording + logging/compression architecture and rollout plan
-- [New Local Network Deployment](Doc/new-local-network-deployment.md) - Beginner deployment in a new LAN
-- [UAT Checklist v1.1.0](Doc/UAT-checklist-v1.1.0.md) - Final acceptance test checklist
-- [Operator Quick Card v1.2.0](Doc/operator-quick-card-v1.2.0.md) - Field-ready quick commands (with manual camera recovery)
-
-## 🤝 Contributing
-
-Feel free to extend and customize:
-- Add more GPIO controls
-- Implement additional sensors
-- Add authentication
-- Optimize performance
-- Add new features
-
-## 📄 License
-
-This project is provided as-is for educational and commercial use.
-
-## 💡 Tips
-
-1. **Start Simple**: Begin with basic LED control before complex GPIO
-2. **Monitor Performance**: Use `tegrastats` to watch GPU usage
-3. **Test Locally**: Test components individually before integration
-4. **Use Docker**: Docker simplifies deployment across systems
-5. **Security**: Always use HTTPS in production
-6. **Scale**: Start with single camera, extend to multiple
-
-## 🎯 Next Steps
-
-1. Deploy on Jetson Nano
-2. Connect USB webcam
-3. Configure GPIO pins for your hardware
-4. Test video streaming
-5. Test GPIO controls
-6. Monitor performance
-7. Deploy with Docker
-8. Add HTTPS certificates
-9. Implement authentication
-10. Extend with AI features
-
----
-
-**Version**: 1.4.0  
-**Last Updated**: 2026-07-27  
-**Status**: Production Ready ✅
+- Keep `.env.example` as the source template for branch configuration.
+- WebRTC availability can vary by JP4.6 dependency profile; fallback flow is expected behavior.
+- Video storage implementation is intentionally deferred; design is documented and ready for phase-1 coding.

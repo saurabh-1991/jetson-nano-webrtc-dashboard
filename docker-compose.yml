@@ -25,6 +25,10 @@ services:
       - CUDA_ENABLED=true
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+      - MEDIA_WEBRTC_GATEWAY_ENABLED
+      - MEDIA_WEBRTC_GATEWAY_WHEP_TEMPLATE
+      - MEDIA_WEBRTC_GATEWAY_CAM1_WHEP_URL
+      - MEDIA_WEBRTC_GATEWAY_CAM2_WHEP_URL
     volumes:
       - /dev:/dev
       - /mnt/usb_recordings:/mnt/usb_recordings

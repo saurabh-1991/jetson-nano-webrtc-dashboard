@@ -13,6 +13,7 @@ import tempfile
 import shutil
 import mimetypes
 import hashlib
+import re
 from functools import lru_cache
 from datetime import datetime
 from typing import Any, Dict, List
@@ -30,6 +31,29 @@ from .config import (
     CAMERA_STRICT_CAMERA_IDS,
     WEBRTC_ENABLED_CAMERA_IDS,
     WEBRTC_MAX_CONNECTIONS,
+    MEDIA_WEBRTC_GATEWAY_ENABLED,
+    MEDIA_WEBRTC_GATEWAY_WHEP_TEMPLATE,
+    MEDIA_WEBRTC_GATEWAY_CAM1_WHEP_URL,
+    MEDIA_WEBRTC_GATEWAY_CAM2_WHEP_URL,
+    CAMERA_H264_STREAM_ENABLED,
+    CAMERA_H264_STREAM_BITRATE,
+    CAMERA_H264_STREAM_ENCODER_PREFERENCE,
+    CAMERA_H264_STREAM_USE_GSTREAMER,
+    CAMERA_H264_STREAM_PROFILES,
+    CAMERA_H264_FAIL_COOLDOWN_THRESHOLD,
+    CAMERA_H264_FAIL_COOLDOWN_BASE_SECONDS,
+    CAMERA_H264_FAIL_COOLDOWN_MAX_SECONDS,
+    CAMERA_H264_FAIL_EARLY_SECONDS,
+    CAMERA_H264_INPUT_MODE,
+    CAMERA_H264_RTSP_URL,
+    CAMERA_H264_RTSP_LATENCY_MS,
+    CAMERA_H264_RTSP_PROTOCOLS,
+    CAMERA_H264_FILE_PATH,
+    CAMERA_H264_GST_INPUT_FORMAT,
+    CAMERA_H264_GST_FRAGMENT_MS,
+    CAMERA_H264_GST_MAXPERF_ENABLE,
+    CAMERA_H264_STREAM_GOP,
+    CAMERA_H264_STREAM_MAX_FPS,
     EXPERIMENTS_CLEANUP_INTERVAL_SECONDS,
     EXPERIMENTS_LOW_WATERMARK_GB,
     EXPERIMENTS_MAX_TOTAL_GB,
@@ -89,6 +113,50 @@ def _current_webrtc_connections() -> int:
 
 def _is_webrtc_allowed_for_camera(camera_id: str) -> bool:
     return camera_id in WEBRTC_ENABLED_CAMERA_IDS_SET
+
+
+def _resolve_media_gateway_whep_url(camera_id: str) -> str:
+    camera_key = str(camera_id or "").strip().lower()
+    per_camera = {
+        "cam1": MEDIA_WEBRTC_GATEWAY_CAM1_WHEP_URL,
+        "cam2": MEDIA_WEBRTC_GATEWAY_CAM2_WHEP_URL,
+    }
+    direct_url = str(per_camera.get(camera_key) or "").strip()
+    if direct_url:
+        return direct_url
+
+    template = str(MEDIA_WEBRTC_GATEWAY_WHEP_TEMPLATE or "").strip()
+    if not template:
+        return ""
+
+    return (
+        template
+        .replace("{camera_id}", camera_key)
+        .replace("{cameraId}", camera_key)
+    )
+
+
+def _media_gateway_info(camera_id: str = None) -> Dict[str, Any]:
+    if camera_id:
+        whep_url = _resolve_media_gateway_whep_url(camera_id)
+        return {
+            "enabled": bool(MEDIA_WEBRTC_GATEWAY_ENABLED),
+            "camera_id": camera_id,
+            "whep_url_configured": bool(whep_url),
+            "whep_url": whep_url,
+        }
+
+    per_camera = {}
+    for cid in get_camera_ids():
+        per_camera[cid] = {
+            "whep_url_configured": bool(_resolve_media_gateway_whep_url(cid)),
+        }
+
+    return {
+        "enabled": bool(MEDIA_WEBRTC_GATEWAY_ENABLED),
+        "whep_template_configured": bool(str(MEDIA_WEBRTC_GATEWAY_WHEP_TEMPLATE or "").strip()),
+        "per_camera": per_camera,
+    }
 
 # Configure logging
 logging.basicConfig(
@@ -159,8 +227,11 @@ safety_watchdog_task = None
 experiment_cleanup_task = None
 experiment_manager = None
 active_mjpeg_sessions = {}
+active_h264_sessions = {}
 active_mjpeg_lock = asyncio.Lock()
 CAMERA_IDLE_RELEASE_SECONDS = max(3, int(os.getenv("CAMERA_IDLE_RELEASE_SECONDS", "6")))
+
+h264_failure_state = {}
 
 CONTROL_HEARTBEAT_TIMEOUT_SECONDS = max(
     5, int(os.getenv("CONTROL_HEARTBEAT_TIMEOUT_SECONDS", "20"))
@@ -454,6 +525,434 @@ def _ensure_camera_session_bucket(camera_id: str):
         active_mjpeg_sessions[camera_id] = set()
 
 
+def _ensure_h264_session_bucket(camera_id: str):
+    if camera_id not in active_h264_sessions:
+        active_h264_sessions[camera_id] = set()
+
+
+def _get_h264_stream_profile(camera_id: str) -> Dict[str, Any]:
+    camera_key = str(camera_id or "").strip().lower()
+    profile = CAMERA_H264_STREAM_PROFILES.get(camera_key)
+    if isinstance(profile, dict):
+        return dict(profile)
+    return {
+        "enabled": bool(CAMERA_H264_STREAM_ENABLED),
+        "bitrate": int(CAMERA_H264_STREAM_BITRATE),
+        "gop": int(CAMERA_H264_STREAM_GOP),
+        "max_fps": int(CAMERA_H264_STREAM_MAX_FPS),
+        "use_gstreamer": bool(CAMERA_H264_STREAM_USE_GSTREAMER),
+    }
+
+
+def _ensure_h264_failure_bucket(camera_id: str) -> Dict[str, Any]:
+    camera_key = str(camera_id or "").strip().lower()
+    bucket = h264_failure_state.get(camera_key)
+    if bucket is None:
+        bucket = {
+            "consecutive_failures": 0,
+            "cooldown_until_ts": 0.0,
+            "last_failure_ts": 0.0,
+            "last_success_ts": 0.0,
+            "last_failure_reason": None,
+        }
+        h264_failure_state[camera_key] = bucket
+    return bucket
+
+
+def _h264_cooldown_remaining_ms(camera_id: str) -> int:
+    bucket = _ensure_h264_failure_bucket(camera_id)
+    remaining_seconds = max(0.0, float(bucket.get("cooldown_until_ts", 0.0)) - time.time())
+    return int(remaining_seconds * 1000.0)
+
+
+def _h264_record_success(camera_id: str):
+    bucket = _ensure_h264_failure_bucket(camera_id)
+    bucket["consecutive_failures"] = 0
+    bucket["cooldown_until_ts"] = 0.0
+    bucket["last_success_ts"] = float(time.time())
+    bucket["last_failure_reason"] = None
+
+
+def _h264_record_failure(camera_id: str, reason: str = "stream_failed"):
+    bucket = _ensure_h264_failure_bucket(camera_id)
+    bucket["consecutive_failures"] = int(bucket.get("consecutive_failures", 0)) + 1
+    bucket["last_failure_ts"] = float(time.time())
+    bucket["last_failure_reason"] = str(reason or "stream_failed")
+
+    threshold = int(CAMERA_H264_FAIL_COOLDOWN_THRESHOLD)
+    failures = int(bucket["consecutive_failures"])
+    if failures >= threshold:
+        exponent = max(0, failures - threshold)
+        cooldown_seconds = min(
+            int(CAMERA_H264_FAIL_COOLDOWN_MAX_SECONDS),
+            int(CAMERA_H264_FAIL_COOLDOWN_BASE_SECONDS) * (2 ** exponent),
+        )
+        bucket["cooldown_until_ts"] = time.time() + float(cooldown_seconds)
+
+
+def _h264_stream_hint(camera_id: str) -> Dict[str, Any]:
+    bucket = _ensure_h264_failure_bucket(camera_id)
+    profile = _get_h264_stream_profile(camera_id)
+    remaining_ms = _h264_cooldown_remaining_ms(camera_id)
+    return {
+        "enabled": bool(profile.get("enabled", CAMERA_H264_STREAM_ENABLED)),
+        "cooldown_active": remaining_ms > 0,
+        "cooldown_remaining_ms": remaining_ms,
+        "consecutive_failures": int(bucket.get("consecutive_failures", 0)),
+        "failure_threshold": int(CAMERA_H264_FAIL_COOLDOWN_THRESHOLD),
+        "failure_cooldown_base_ms": int(CAMERA_H264_FAIL_COOLDOWN_BASE_SECONDS) * 1000,
+        "failure_cooldown_max_ms": int(CAMERA_H264_FAIL_COOLDOWN_MAX_SECONDS) * 1000,
+        "profile": {
+            "bitrate": int(profile.get("bitrate", CAMERA_H264_STREAM_BITRATE)),
+            "gop": int(profile.get("gop", CAMERA_H264_STREAM_GOP)),
+            "max_fps": int(profile.get("max_fps", CAMERA_H264_STREAM_MAX_FPS)),
+            "use_gstreamer": bool(profile.get("use_gstreamer", CAMERA_H264_STREAM_USE_GSTREAMER)),
+        },
+    }
+
+
+@lru_cache(maxsize=1)
+def _ffmpeg_encoders_cache_blob() -> str:
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            timeout=2.5,
+            check=False,
+        )
+        return (result.stdout or "").lower()
+    except Exception:
+        return ""
+
+
+def _ffmpeg_encoder_available(encoder_name: str) -> bool:
+    blob = _ffmpeg_encoders_cache_blob()
+    if not blob:
+        return False
+    return (" " + str(encoder_name).strip().lower()) in blob
+
+
+@lru_cache(maxsize=64)
+def _gst_element_available(element_name: str) -> bool:
+    name = str(element_name or "").strip()
+    if not name:
+        return False
+    try:
+        result = subprocess.run(
+            ["gst-inspect-1.0", name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            check=False,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _pick_h264_stream_encoder(encoder_preference: str = None) -> str:
+    preferred = [
+        token.strip().lower()
+        for token in str(encoder_preference or CAMERA_H264_STREAM_ENCODER_PREFERENCE or "").split(",")
+        if token.strip()
+    ]
+    if not preferred:
+        preferred = ["h264_nvmpi", "h264_omx", "h264_v4l2m2m", "libx264"]
+
+    for encoder in preferred:
+        if _ffmpeg_encoder_available(encoder):
+            return encoder
+
+    return "libx264"
+
+
+def _build_h264_stream_ffmpeg_command(camera_id: str, h264_profile: Dict[str, Any]):
+    input_mode = str(CAMERA_H264_INPUT_MODE or "usb").strip().lower()
+    profile = CAMERA_PROFILES.get(camera_id) or {}
+    camera_device = str(profile.get("device") or "/dev/video0")
+    width = max(160, int(profile.get("width") or 640))
+    height = max(120, int(profile.get("height") or 480))
+    profile_max_fps = max(1, int(h264_profile.get("max_fps", CAMERA_H264_STREAM_MAX_FPS)))
+    profile_bitrate = max(200000, int(h264_profile.get("bitrate", CAMERA_H264_STREAM_BITRATE)))
+    profile_gop = max(5, int(h264_profile.get("gop", CAMERA_H264_STREAM_GOP)))
+    fps = max(1, min(int(profile.get("fps") or 15), profile_max_fps))
+
+    # Prefer NVIDIA encoder stack first for Jetson; fallback to libx264.
+    encoder = _pick_h264_stream_encoder(CAMERA_H264_STREAM_ENCODER_PREFERENCE)
+    if encoder == "libx264":
+        encoder_args = [
+            "-preset",
+            "veryfast",
+            "-tune",
+            "zerolatency",
+            "-b:v",
+            str(int(profile_bitrate)),
+            "-maxrate",
+            str(int(profile_bitrate)),
+            "-bufsize",
+            str(int(profile_bitrate)),
+        ]
+    elif encoder in ("h264_nvmpi", "h264_omx"):
+        encoder_args = [
+            "-b:v",
+            str(int(profile_bitrate)),
+            "-maxrate",
+            str(int(profile_bitrate)),
+            "-bufsize",
+            str(int(profile_bitrate)),
+        ]
+    elif encoder == "h264_v4l2m2m":
+        encoder_args = [
+            "-b:v",
+            str(int(profile_bitrate)),
+            "-maxrate",
+            str(int(profile_bitrate)),
+            "-bufsize",
+            str(int(profile_bitrate)),
+        ]
+    else:
+        encoder_args = [
+            "-b:v",
+            str(int(profile_bitrate)),
+        ]
+
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-fflags",
+        "nobuffer",
+    ]
+
+    if input_mode == "rtsp" and CAMERA_H264_RTSP_URL:
+        cmd.extend(
+            [
+                "-rtsp_transport",
+                "tcp" if CAMERA_H264_RTSP_PROTOCOLS not in ("udp", "tcp") else CAMERA_H264_RTSP_PROTOCOLS,
+                "-flags",
+                "low_delay",
+                "-thread_queue_size",
+                "64",
+                "-i",
+                CAMERA_H264_RTSP_URL,
+            ]
+        )
+    elif input_mode == "file" and CAMERA_H264_FILE_PATH:
+        cmd.extend(
+            [
+                "-re",
+                "-stream_loop",
+                "-1",
+                "-i",
+                CAMERA_H264_FILE_PATH,
+            ]
+        )
+    else:
+        cmd.extend(
+            [
+                "-f",
+                "v4l2",
+                "-thread_queue_size",
+                "64",
+                "-input_format",
+                "mjpeg",
+                "-framerate",
+                str(int(fps)),
+                "-video_size",
+                "{0}x{1}".format(width, height),
+                "-i",
+                camera_device,
+            ]
+        )
+
+    cmd.extend(
+        [
+        "-an",
+        "-pix_fmt",
+        "yuv420p",
+        "-g",
+        str(int(profile_gop)),
+        "-c:v",
+        encoder,
+        ]
+    )
+
+    cmd.extend(encoder_args)
+    cmd.extend(
+        [
+            "-movflags",
+            "frag_keyframe+empty_moov+default_base_moof",
+            "-f",
+            "mp4",
+            "pipe:1",
+        ]
+    )
+
+    return cmd, encoder
+
+
+def _build_h264_stream_gst_command(camera_id: str, h264_profile: Dict[str, Any]):
+    input_mode = str(CAMERA_H264_INPUT_MODE or "usb").strip().lower()
+    profile = CAMERA_PROFILES.get(camera_id) or {}
+    camera_device = str(profile.get("device") or "/dev/video0")
+    width = max(160, int(profile.get("width") or 640))
+    height = max(120, int(profile.get("height") or 480))
+    profile_max_fps = max(1, int(h264_profile.get("max_fps", CAMERA_H264_STREAM_MAX_FPS)))
+    profile_bitrate = max(200000, int(h264_profile.get("bitrate", CAMERA_H264_STREAM_BITRATE)))
+    profile_gop = max(5, int(h264_profile.get("gop", CAMERA_H264_STREAM_GOP)))
+    fps = max(1, min(int(profile.get("fps") or 15), profile_max_fps))
+    input_format = str(CAMERA_H264_GST_INPUT_FORMAT or "YUY2").upper()
+    supported_fps = _query_v4l2_max_fps_for_mode(camera_device, input_format, width, height)
+    if supported_fps and supported_fps > 0:
+        fps = max(1, min(int(fps), int(supported_fps)))
+    bitrate = int(profile_bitrate)
+    gop = int(profile_gop)
+
+    maxperf_value = "true" if CAMERA_H264_GST_MAXPERF_ENABLE else "false"
+
+    if input_mode == "rtsp" and CAMERA_H264_RTSP_URL:
+        source_chain = [
+            "rtspsrc",
+            "location={0}".format(CAMERA_H264_RTSP_URL),
+            "latency={0}".format(int(CAMERA_H264_RTSP_LATENCY_MS)),
+            "protocols=tcp" if CAMERA_H264_RTSP_PROTOCOLS != "udp" else "protocols=udp",
+            "!",
+            "rtph264depay",
+            "!",
+            "h264parse",
+            "!",
+            "nvv4l2decoder",
+            "!",
+        ]
+    elif input_mode == "file" and CAMERA_H264_FILE_PATH:
+        source_chain = [
+            "filesrc",
+            "location={0}".format(CAMERA_H264_FILE_PATH),
+            "!",
+            "qtdemux",
+            "!",
+            "h264parse",
+            "!",
+            "nvv4l2decoder",
+            "!",
+        ]
+    else:
+        source_chain = [
+            "v4l2src",
+            "device={0}".format(camera_device),
+            "io-mode=2",
+            "do-timestamp=true",
+            "!",
+            "video/x-raw,format={0},width={1},height={2},framerate={3}/1".format(
+                input_format,
+                int(width),
+                int(height),
+                int(fps),
+            ),
+            "!",
+        ]
+
+    cmd = [
+        "gst-launch-1.0",
+        "-q",
+    ]
+    cmd.extend(source_chain)
+    cmd.extend([
+        "nvvidconv",
+        "!",
+        "video/x-raw(memory:NVMM),format=NV12",
+        "!",
+        "nvv4l2h264enc",
+        "bitrate={0}".format(bitrate),
+        "iframeinterval={0}".format(gop),
+        "idrinterval={0}".format(gop),
+        "insert-sps-pps=true",
+        "maxperf-enable={0}".format(maxperf_value),
+        "!",
+        "h264parse",
+        "config-interval=1",
+        "!",
+        "mp4mux",
+        "streamable=true",
+        "fragment-duration={0}".format(int(CAMERA_H264_GST_FRAGMENT_MS)),
+        "!",
+        "fdsink",
+        "fd=1",
+        "sync=false",
+    ])
+    return cmd, "nvv4l2h264enc"
+
+
+def _query_v4l2_max_fps_for_mode(camera_device: str, pixel_format: str, width: int, height: int):
+    # Best-effort parser for `v4l2-ctl --list-formats-ext` to avoid invalid caps.
+    try:
+        result = subprocess.run(
+            ["v4l2-ctl", "-d", str(camera_device), "--list-formats-ext"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            timeout=2.5,
+            check=False,
+        )
+        text = result.stdout or ""
+    except Exception:
+        return None
+
+    desired = str(pixel_format or "").strip().upper()
+    if desired == "YUY2":
+        desired_fourcc = {"YUY2", "YUYV"}
+    else:
+        desired_fourcc = {desired}
+
+    current_fourcc = ""
+    current_size = None
+    fps_values = []
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        pf_match = re.search(r"Pixel Format:\s*'([^']+)'", line)
+        if pf_match:
+            current_fourcc = str(pf_match.group(1) or "").strip().upper()
+            current_size = None
+            continue
+
+        size_match = re.search(r"Size:\s*Discrete\s*(\d+)x(\d+)", line)
+        if size_match:
+            current_size = (int(size_match.group(1)), int(size_match.group(2)))
+            continue
+
+        fps_match = re.search(r"\(([0-9.]+)\s*fps\)", line)
+        if fps_match and current_fourcc in desired_fourcc and current_size == (int(width), int(height)):
+            try:
+                fps_values.append(float(fps_match.group(1)))
+            except Exception:
+                continue
+
+    if not fps_values:
+        return None
+    return int(max(fps_values))
+
+
+def _can_use_h264_gst_pipeline(h264_profile: Dict[str, Any]) -> bool:
+    if not bool(h264_profile.get("use_gstreamer", CAMERA_H264_STREAM_USE_GSTREAMER)):
+        return False
+
+    input_mode = str(CAMERA_H264_INPUT_MODE or "usb").strip().lower()
+    required = ["nvvidconv", "nvv4l2h264enc", "h264parse", "mp4mux", "fdsink"]
+
+    if input_mode == "rtsp" and CAMERA_H264_RTSP_URL:
+        required.extend(["rtspsrc", "rtph264depay", "nvv4l2decoder"])
+    elif input_mode == "file" and CAMERA_H264_FILE_PATH:
+        required.extend(["filesrc", "qtdemux", "nvv4l2decoder"])
+    else:
+        required.append("v4l2src")
+
+    return all(_gst_element_available(name) for name in required)
+
+
 async def camera_idle_watchdog():
     """Release camera automatically after inactivity when no viewers remain."""
     while True:
@@ -496,9 +995,11 @@ def _get_or_recover_camera(camera_id: str):
     if camera is not None and camera.is_open:
         return camera
 
-    # One-shot force refresh if the existing instance is closed.
-    release_camera(camera_id)
-    camera = get_camera(camera_id)
+    # One-shot force refresh only when an existing instance is present but closed.
+    # Avoid release/recreate churn for already-missing instances.
+    if camera is not None:
+        release_camera(camera_id)
+        camera = get_camera(camera_id)
     return camera
 
 
@@ -856,6 +1357,7 @@ async def system_info():
             "default_camera_id": _resolve_camera_id(CAMERA_DEFAULT_ID),
             "strict_camera_ids": bool(CAMERA_STRICT_CAMERA_IDS),
         },
+        "media_gateway": _media_gateway_info(),
         "software": get_software_version_info(),
         "timestamp": datetime.now().isoformat()
     }
@@ -1201,6 +1703,8 @@ async def camera_info(camera_id: str = CAMERA_DEFAULT_ID, create_if_missing: boo
             "max_connections": WEBRTC_MAX_CONNECTIONS,
             "current_connections": _current_webrtc_connections(),
         },
+        "h264_stream": _h264_stream_hint(camera_id),
+        "media_gateway": _media_gateway_info(camera_id),
         "pipeline_diagnostics": pipeline_info,
         "timestamp": datetime.now().isoformat()
     }
@@ -1563,6 +2067,152 @@ async def stream_mjpeg(request: Request):
     )
 
 
+@app.get("/api/camera/stream_h264")
+async def stream_h264(request: Request):
+    """Experimental H.264 fragmented MP4 live stream (Phase 2 trial path)."""
+    if not CAMERA_H264_STREAM_ENABLED:
+        raise HTTPException(status_code=503, detail="H.264 live stream mode is disabled")
+
+    input_mode = str(CAMERA_H264_INPUT_MODE or "usb").strip().lower()
+    if input_mode == "rtsp" and not CAMERA_H264_RTSP_URL:
+        raise HTTPException(
+            status_code=400,
+            detail="CAMERA_H264_INPUT_MODE=rtsp requires CAMERA_H264_RTSP_URL",
+        )
+    if input_mode == "file":
+        if not CAMERA_H264_FILE_PATH:
+            raise HTTPException(
+                status_code=400,
+                detail="CAMERA_H264_INPUT_MODE=file requires CAMERA_H264_FILE_PATH",
+            )
+        if not os.path.exists(CAMERA_H264_FILE_PATH):
+            raise HTTPException(
+                status_code=400,
+                detail="CAMERA_H264_FILE_PATH does not exist: {0}".format(CAMERA_H264_FILE_PATH),
+            )
+
+    camera_id = _resolve_camera_id(request.query_params.get("camera_id") or CAMERA_DEFAULT_ID)
+    h264_profile = _get_h264_stream_profile(camera_id)
+
+    if not bool(h264_profile.get("enabled", CAMERA_H264_STREAM_ENABLED)):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "h264_disabled_for_camera",
+                "camera_id": camera_id,
+                "message": "H.264 stream disabled for this camera",
+            },
+        )
+
+    cooldown_remaining_ms = _h264_cooldown_remaining_ms(camera_id)
+    if cooldown_remaining_ms > 0:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "h264_temporarily_cooled_down",
+                "camera_id": camera_id,
+                "retry_after_ms": cooldown_remaining_ms,
+                "message": "H.264 temporarily cooled down after repeated failures. Retry later.",
+            },
+        )
+
+    async def generate_h264():
+        stream_session_id = request.query_params.get("sid") or str(uuid.uuid4())
+        if _can_use_h264_gst_pipeline(h264_profile):
+            cmd, encoder = _build_h264_stream_gst_command(camera_id, h264_profile)
+            stream_backend = "gstreamer"
+        else:
+            cmd, encoder = _build_h264_stream_ffmpeg_command(camera_id, h264_profile)
+            stream_backend = "ffmpeg"
+        proc = None
+        bytes_streamed = 0
+        started_at = time.time()
+
+        async with active_mjpeg_lock:
+            _ensure_h264_session_bucket(camera_id)
+            active_h264_sessions[camera_id].add(stream_session_id)
+            logger.info(
+                "H264 client connected sid=%s camera=%s mode=%s backend=%s encoder=%s. Active H264 clients: %s",
+                stream_session_id,
+                camera_id,
+                input_mode,
+                stream_backend,
+                encoder,
+                len(active_h264_sessions[camera_id]),
+            )
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+            )
+
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                chunk = await run_in_threadpool(proc.stdout.read, 64 * 1024)
+                if chunk:
+                    bytes_streamed += len(chunk)
+                    yield chunk
+                    continue
+
+                poll_rc = proc.poll()
+                if poll_rc is not None:
+                    break
+
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("H264 stream error (camera=%s): %s", camera_id, e)
+        finally:
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=1.5)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+
+            async with active_mjpeg_lock:
+                _ensure_h264_session_bucket(camera_id)
+                active_h264_sessions[camera_id].discard(stream_session_id)
+                logger.info(
+                    "H264 client disconnected sid=%s camera=%s. Active H264 clients: %s",
+                    stream_session_id,
+                    camera_id,
+                    len(active_h264_sessions[camera_id]),
+                )
+
+            elapsed = max(0.0, time.time() - started_at)
+            if bytes_streamed > 0:
+                _h264_record_success(camera_id)
+            elif elapsed <= float(CAMERA_H264_FAIL_EARLY_SECONDS):
+                _h264_record_failure(camera_id, reason="h264_early_disconnect")
+            else:
+                _h264_record_failure(camera_id, reason="h264_no_bytes_streamed")
+
+    return StreamingResponse(
+        generate_h264(),
+        media_type="video/mp4",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # ==================== GPIO ENDPOINTS ====================
 
 @app.get("/api/gpio/status")
@@ -1787,16 +2437,22 @@ async def get_stats():
     """Get application statistics"""
     per_camera = {}
     total_mjpeg = 0
+    total_h264 = 0
     for camera_id in get_camera_ids():
         cam = get_camera(camera_id, create_if_missing=False)
         async with active_mjpeg_lock:
             _ensure_camera_session_bucket(camera_id)
             mjpeg_clients = len(active_mjpeg_sessions[camera_id])
+            _ensure_h264_session_bucket(camera_id)
+            h264_clients = len(active_h264_sessions[camera_id])
             total_mjpeg += mjpeg_clients
+            total_h264 += h264_clients
         per_camera[camera_id] = {
             "camera_frames": cam.get_frame_count() if cam else 0,
             "camera_performance": cam.get_performance_stats() if cam else None,
             "active_mjpeg_clients": mjpeg_clients,
+            "active_h264_clients": h264_clients,
+            "h264_stream": _h264_stream_hint(camera_id),
         }
 
     default_camera = get_camera(_resolve_camera_id(CAMERA_DEFAULT_ID), create_if_missing=False)
@@ -1813,6 +2469,22 @@ async def get_stats():
             "camera_performance": default_camera.get_performance_stats() if default_camera else None,
         "camera_idle_release_seconds": CAMERA_IDLE_RELEASE_SECONDS,
             "active_mjpeg_clients": total_mjpeg,
+            "active_h264_clients": total_h264,
+        "h264_stream_profile": {
+            "enabled": bool(CAMERA_H264_STREAM_ENABLED),
+            "input_mode": str(CAMERA_H264_INPUT_MODE or "usb"),
+            "use_gstreamer": bool(CAMERA_H264_STREAM_USE_GSTREAMER),
+            "rtsp_configured": bool(CAMERA_H264_RTSP_URL),
+            "file_configured": bool(CAMERA_H264_FILE_PATH),
+            "failure_threshold": int(CAMERA_H264_FAIL_COOLDOWN_THRESHOLD),
+            "failure_cooldown_base_ms": int(CAMERA_H264_FAIL_COOLDOWN_BASE_SECONDS) * 1000,
+            "failure_cooldown_max_ms": int(CAMERA_H264_FAIL_COOLDOWN_MAX_SECONDS) * 1000,
+            "per_camera": {
+                camera_id: _h264_stream_hint(camera_id).get("profile", {})
+                for camera_id in get_camera_ids()
+            },
+        },
+        "media_gateway_profile": _media_gateway_info(),
         "webrtc_connections": webrtc_connections,
             "cameras": per_camera,
         "timestamp": datetime.now().isoformat()

@@ -1,0 +1,5 @@
+# Enforce LF line endings for executable shell scripts used on Jetson/Linux
+*.sh text eol=lf
+
+# Keep PowerShell scripts in CRLF for Windows ergonomics
+*.ps1 text eol=crlf

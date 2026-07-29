@@ -1,14 +1,18 @@
+import { getApiCooldownState } from './api'
+
 const RETENTION_MS = 2 * 60 * 1000
 const MAX_QUEUE = 400
 const FLUSH_INTERVAL_MS = 5000
+const FLUSH_MAX_INTERVAL_MS = 30000
 const HEARTBEAT_INTERVAL_MS = 5000
-const HEARTBEAT_MAX_INTERVAL_MS = 20000
+const HEARTBEAT_MAX_INTERVAL_MS = 60000
 const DUPLICATE_WINDOW_MS = 15000
 
 const queue = []
 let flushTimer = null
 let heartbeatTimer = null
 let heartbeatFailureCount = 0
+let flushFailureCount = 0
 const duplicateTracker = new Map()
 
 const sessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -94,9 +98,25 @@ export const logFrontendEvent = (type, message = '', severity = 'info', meta = {
   safeLogToConsole(event)
 }
 
+const getFlushDelayMs = () => {
+  const cooldown = getApiCooldownState()
+  if (cooldown.active) {
+    return Math.max(FLUSH_INTERVAL_MS, cooldown.remainingMs + 300)
+  }
+  const step = Math.max(0, Math.min(3, Number(flushFailureCount || 0)))
+  return Math.min(FLUSH_MAX_INTERVAL_MS, FLUSH_INTERVAL_MS * (2 ** step))
+}
+
 const flushEvents = async () => {
   pruneQueue()
   if (queue.length === 0) {
+    flushFailureCount = 0
+    return
+  }
+
+  const cooldown = getApiCooldownState()
+  if (cooldown.active) {
+    flushFailureCount = Math.min(flushFailureCount + 1, 6)
     return
   }
 
@@ -118,7 +138,9 @@ const flushEvents = async () => {
       }),
       keepalive: true,
     })
+    flushFailureCount = 0
   } catch (_err) {
+    flushFailureCount = Math.min(flushFailureCount + 1, 6)
     // Re-queue on failure (bounded by retention and max queue)
     const requeued = eventsToSend.map((e) => ({ ...e, atTs: Date.now() }))
     requeued.forEach(enqueue)
@@ -131,6 +153,12 @@ const getHeartbeatDelayMs = () => {
 }
 
 const sendHeartbeat = async () => {
+  const cooldown = getApiCooldownState()
+  if (cooldown.active) {
+    heartbeatFailureCount = Math.min(heartbeatFailureCount + 1, 6)
+    return false
+  }
+
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     heartbeatFailureCount = Math.min(heartbeatFailureCount + 1, 6)
     return false
@@ -164,7 +192,25 @@ const scheduleHeartbeat = (delayMs = HEARTBEAT_INTERVAL_MS) => {
 
   heartbeatTimer = window.setTimeout(async () => {
     await sendHeartbeat()
-    scheduleHeartbeat(getHeartbeatDelayMs())
+    const cooldown = getApiCooldownState()
+    const nextDelay = cooldown.active
+      ? Math.max(getHeartbeatDelayMs(), cooldown.remainingMs + 300)
+      : getHeartbeatDelayMs()
+    scheduleHeartbeat(nextDelay)
+  }, delayMs)
+}
+
+const scheduleFlush = (delayMs = FLUSH_INTERVAL_MS) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+  }
+
+  flushTimer = window.setTimeout(async () => {
+    await flushEvents()
+    scheduleFlush(getFlushDelayMs())
   }, delayMs)
 }
 
@@ -216,9 +262,7 @@ export const initializeEventLogger = () => {
   bindBrowserErrorHooks()
   logFrontendEvent('frontend_startup', 'Frontend event logger initialized', 'info', { sessionId })
 
-  flushTimer = window.setInterval(() => {
-    flushEvents()
-  }, FLUSH_INTERVAL_MS)
+  scheduleFlush(getFlushDelayMs())
 
   // Send immediately on startup for faster watchdog arming, then continue with adaptive cadence.
   sendHeartbeat().finally(() => {
@@ -232,7 +276,7 @@ export const initializeEventLogger = () => {
 
 export const shutdownEventLogger = () => {
   if (flushTimer) {
-    clearInterval(flushTimer)
+    clearTimeout(flushTimer)
     flushTimer = null
   }
   if (heartbeatTimer) {

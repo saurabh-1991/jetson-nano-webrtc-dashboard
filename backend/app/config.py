@@ -10,6 +10,13 @@ def _parse_optional_bool_env(var_name: str):
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _parse_bool_with_default(var_name: str, default_value: bool) -> bool:
+    parsed = _parse_optional_bool_env(var_name)
+    if parsed is None:
+        return bool(default_value)
+    return bool(parsed)
+
+
 def _parse_optional_camera_accel(var_name: str) -> str:
     raw = str(os.getenv(var_name, "")).strip().lower()
     return raw if raw in ("", "auto", "hardware", "compat", "direct") else ""
@@ -40,7 +47,7 @@ CAMERA_FPS = 30
 CAMERA2_DEVICE = os.getenv("CAMERA2_DEVICE", "/dev/video1")
 CAMERA2_WIDTH = int(os.getenv("CAMERA2_WIDTH", "640"))
 CAMERA2_HEIGHT = int(os.getenv("CAMERA2_HEIGHT", "480"))
-CAMERA2_FPS = int(os.getenv("CAMERA2_FPS", "20"))
+CAMERA2_FPS = int(os.getenv("CAMERA2_FPS", "30"))
 CAMERA_DEFAULT_ID = os.getenv("CAMERA_DEFAULT_ID", "cam1").lower()
 CAMERA_ENABLED_IDS_RAW = os.getenv("CAMERA_ENABLED_IDS", "cam1,cam2")
 CAMERA_STRICT_CAMERA_IDS = os.getenv("CAMERA_STRICT_CAMERA_IDS", "true").lower() in (
@@ -172,6 +179,17 @@ if not WEBRTC_ENABLED_CAMERA_IDS:
 
 WEBRTC_MAX_CONNECTIONS = max(0, int(os.getenv("WEBRTC_MAX_CONNECTIONS", "1")))
 
+# Optional external WebRTC gateway profile (e.g., MediaMTX WHEP)
+MEDIA_WEBRTC_GATEWAY_ENABLED = os.getenv("MEDIA_WEBRTC_GATEWAY_ENABLED", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+MEDIA_WEBRTC_GATEWAY_WHEP_TEMPLATE = os.getenv("MEDIA_WEBRTC_GATEWAY_WHEP_TEMPLATE", "").strip()
+MEDIA_WEBRTC_GATEWAY_CAM1_WHEP_URL = os.getenv("MEDIA_WEBRTC_GATEWAY_CAM1_WHEP_URL", "").strip()
+MEDIA_WEBRTC_GATEWAY_CAM2_WHEP_URL = os.getenv("MEDIA_WEBRTC_GATEWAY_CAM2_WHEP_URL", "").strip()
+
 CAMERA_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA_BUFFER_FLUSH_GRABS", "1")))
 CAMERA1_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA1_BUFFER_FLUSH_GRABS", str(CAMERA_BUFFER_FLUSH_GRABS))))
 CAMERA2_BUFFER_FLUSH_GRABS = max(0, int(os.getenv("CAMERA2_BUFFER_FLUSH_GRABS", str(max(CAMERA_BUFFER_FLUSH_GRABS, 2)))))
@@ -198,6 +216,123 @@ CAMERA1_CONSECUTIVE_STALL_LIMIT = max(
 CAMERA2_CONSECUTIVE_STALL_LIMIT = max(
     1,
     int(os.getenv("CAMERA2_CONSECUTIVE_STALL_LIMIT", str(max(2, CAMERA_CONSECUTIVE_STALL_LIMIT)))),
+)
+CAMERA_RECOVERY_BASE_BACKOFF_SECONDS = max(
+    0.2,
+    float(os.getenv("CAMERA_RECOVERY_BASE_BACKOFF_SECONDS", "2.0")),
+)
+CAMERA_RECOVERY_BACKOFF_MAX_SECONDS = max(
+    CAMERA_RECOVERY_BASE_BACKOFF_SECONDS,
+    float(os.getenv("CAMERA_RECOVERY_BACKOFF_MAX_SECONDS", "30.0")),
+)
+CAMERA_RECOVERY_MIN_REINIT_INTERVAL_SECONDS = max(
+    0.0,
+    float(os.getenv("CAMERA_RECOVERY_MIN_REINIT_INTERVAL_SECONDS", "0.75")),
+)
+
+# Phase 2 experimental live stream path (H.264 fragmented MP4 over HTTP)
+CAMERA_H264_STREAM_ENABLED = os.getenv("CAMERA_H264_STREAM_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+CAMERA_H264_STREAM_BITRATE = max(200000, int(os.getenv("CAMERA_H264_STREAM_BITRATE", "1200000")))
+CAMERA_H264_STREAM_GOP = max(5, int(os.getenv("CAMERA_H264_STREAM_GOP", "15")))
+CAMERA_H264_STREAM_MAX_FPS = max(5, int(os.getenv("CAMERA_H264_STREAM_MAX_FPS", "20")))
+CAMERA_H264_STREAM_ENCODER_PREFERENCE = os.getenv(
+    "CAMERA_H264_STREAM_ENCODER_PREFERENCE",
+    "h264_v4l2m2m,h264_omx,h264_nvmpi,libx264",
+)
+CAMERA_H264_STREAM_USE_GSTREAMER = os.getenv("CAMERA_H264_STREAM_USE_GSTREAMER", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+CAMERA_H264_INPUT_MODE = os.getenv("CAMERA_H264_INPUT_MODE", "usb").strip().lower()
+if CAMERA_H264_INPUT_MODE not in ("usb", "rtsp", "file"):
+    CAMERA_H264_INPUT_MODE = "usb"
+CAMERA_H264_RTSP_URL = os.getenv("CAMERA_H264_RTSP_URL", "").strip()
+CAMERA_H264_RTSP_LATENCY_MS = max(0, int(os.getenv("CAMERA_H264_RTSP_LATENCY_MS", "80")))
+CAMERA_H264_RTSP_PROTOCOLS = os.getenv("CAMERA_H264_RTSP_PROTOCOLS", "tcp").strip().lower() or "tcp"
+CAMERA_H264_FILE_PATH = os.getenv("CAMERA_H264_FILE_PATH", "").strip()
+CAMERA_H264_GST_INPUT_FORMAT = os.getenv("CAMERA_H264_GST_INPUT_FORMAT", "YUY2").strip().upper() or "YUY2"
+CAMERA_H264_GST_FRAGMENT_MS = max(100, int(os.getenv("CAMERA_H264_GST_FRAGMENT_MS", "250")))
+CAMERA_H264_GST_MAXPERF_ENABLE = os.getenv("CAMERA_H264_GST_MAXPERF_ENABLE", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
+CAMERA1_H264_STREAM_ENABLED = _parse_bool_with_default("CAMERA1_H264_STREAM_ENABLED", CAMERA_H264_STREAM_ENABLED)
+CAMERA2_H264_STREAM_ENABLED = _parse_bool_with_default("CAMERA2_H264_STREAM_ENABLED", CAMERA_H264_STREAM_ENABLED)
+CAMERA1_H264_STREAM_BITRATE = max(
+    200000,
+    int(os.getenv("CAMERA1_H264_STREAM_BITRATE", str(CAMERA_H264_STREAM_BITRATE))),
+)
+CAMERA2_H264_STREAM_BITRATE = max(
+    200000,
+    int(os.getenv("CAMERA2_H264_STREAM_BITRATE", str(CAMERA_H264_STREAM_BITRATE))),
+)
+CAMERA1_H264_STREAM_GOP = max(
+    5,
+    int(os.getenv("CAMERA1_H264_STREAM_GOP", str(CAMERA_H264_STREAM_GOP))),
+)
+CAMERA2_H264_STREAM_GOP = max(
+    5,
+    int(os.getenv("CAMERA2_H264_STREAM_GOP", str(CAMERA_H264_STREAM_GOP))),
+)
+CAMERA1_H264_STREAM_MAX_FPS = max(
+    5,
+    int(os.getenv("CAMERA1_H264_STREAM_MAX_FPS", str(CAMERA_H264_STREAM_MAX_FPS))),
+)
+CAMERA2_H264_STREAM_MAX_FPS = max(
+    5,
+    int(os.getenv("CAMERA2_H264_STREAM_MAX_FPS", str(CAMERA_H264_STREAM_MAX_FPS))),
+)
+CAMERA1_H264_STREAM_USE_GSTREAMER = _parse_bool_with_default(
+    "CAMERA1_H264_STREAM_USE_GSTREAMER",
+    CAMERA_H264_STREAM_USE_GSTREAMER,
+)
+CAMERA2_H264_STREAM_USE_GSTREAMER = _parse_bool_with_default(
+    "CAMERA2_H264_STREAM_USE_GSTREAMER",
+    CAMERA_H264_STREAM_USE_GSTREAMER,
+)
+
+CAMERA_H264_STREAM_PROFILES = {
+    "cam1": {
+        "enabled": CAMERA1_H264_STREAM_ENABLED,
+        "bitrate": CAMERA1_H264_STREAM_BITRATE,
+        "gop": CAMERA1_H264_STREAM_GOP,
+        "max_fps": CAMERA1_H264_STREAM_MAX_FPS,
+        "use_gstreamer": CAMERA1_H264_STREAM_USE_GSTREAMER,
+    },
+    "cam2": {
+        "enabled": CAMERA2_H264_STREAM_ENABLED,
+        "bitrate": CAMERA2_H264_STREAM_BITRATE,
+        "gop": CAMERA2_H264_STREAM_GOP,
+        "max_fps": CAMERA2_H264_STREAM_MAX_FPS,
+        "use_gstreamer": CAMERA2_H264_STREAM_USE_GSTREAMER,
+    },
+}
+
+CAMERA_H264_FAIL_COOLDOWN_THRESHOLD = max(
+    1,
+    int(os.getenv("CAMERA_H264_FAIL_COOLDOWN_THRESHOLD", "2")),
+)
+CAMERA_H264_FAIL_COOLDOWN_BASE_SECONDS = max(
+    5,
+    int(os.getenv("CAMERA_H264_FAIL_COOLDOWN_BASE_SECONDS", "45")),
+)
+CAMERA_H264_FAIL_COOLDOWN_MAX_SECONDS = max(
+    CAMERA_H264_FAIL_COOLDOWN_BASE_SECONDS,
+    int(os.getenv("CAMERA_H264_FAIL_COOLDOWN_MAX_SECONDS", "300")),
+)
+CAMERA_H264_FAIL_EARLY_SECONDS = max(
+    1,
+    int(os.getenv("CAMERA_H264_FAIL_EARLY_SECONDS", "3")),
 )
 
 # IR camera low-light adaptation (best-effort via V4L2 controls)

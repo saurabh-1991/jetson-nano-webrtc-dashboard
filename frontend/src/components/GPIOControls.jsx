@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { gpioAPI } from '../services/api'
+import { getApiCooldownState } from '../services/api'
+import { shouldThrottleClientNoise } from '../services/api'
 import ToggleSwitch from './ToggleSwitch'
 import './GPIOControls.css'
 
@@ -24,6 +26,11 @@ export const GPIOControls = () => {
   }, [])
 
   const fetchGPIOStatus = async () => {
+    const cooldown = getApiCooldownState()
+    if (cooldown.active) {
+      return
+    }
+
     try {
       const response = await gpioAPI.getOutputs()
       const gpio = response.data.gpio || {}
@@ -31,7 +38,9 @@ export const GPIOControls = () => {
       setGpioAvailable(gpio.gpio_available !== false)
       setError(null)
     } catch (err) {
-      console.error('Failed to fetch GPIO status:', err)
+      if (!shouldThrottleClientNoise('gpio_status_fetch_failed')) {
+        console.error('Failed to fetch GPIO status:', err)
+      }
       setError('Failed to fetch controls status')
     }
   }
@@ -54,7 +63,9 @@ export const GPIOControls = () => {
       setGpioAvailable(gpio.gpio_available !== false)
     } catch (err) {
       setError(`Failed to set ${outputName}`)
-      console.error(err)
+      if (!shouldThrottleClientNoise(`gpio_set_failed_${outputName}`)) {
+        console.error(err)
+      }
       await fetchGPIOStatus()
     } finally {
       setLoadingOutput(null)

@@ -10,7 +10,58 @@ export const api = axios.create({
 })
 
 const errorThrottleMap = new Map()
-const ERROR_THROTTLE_MS = 15000
+const ERROR_THROTTLE_MS = 30000
+const API_COOLDOWN_BASE_MS = 12000
+const API_COOLDOWN_MAX_MS = 60000
+
+let timeoutBurstCount = 0
+let apiCooldownUntilTs = 0
+
+const getApiCooldownRemainingMs = () => Math.max(0, apiCooldownUntilTs - Date.now())
+
+export const isApiCoolingDown = () => getApiCooldownRemainingMs() > 0
+
+export const getApiCooldownState = () => ({
+  active: isApiCoolingDown(),
+  remainingMs: getApiCooldownRemainingMs(),
+  burstCount: timeoutBurstCount,
+})
+
+const classifyTransientNetworkError = (error) => {
+  const errorCode = String(error?.code || '').toUpperCase()
+  const message = String(error?.message || '').toLowerCase()
+
+  const isTimeout = errorCode === 'ECONNABORTED' || message.includes('timeout')
+  const isNetwork = errorCode === 'ERR_NETWORK' || message.includes('network error')
+  const isConnection = message.includes('failed to fetch') || message.includes('err_connection')
+  const isAbort = errorCode === 'ERR_CANCELED' || message.includes('canceled')
+
+  return {
+    isTimeout,
+    isNetwork,
+    isConnection,
+    isAbort,
+    isTransient: isTimeout || isNetwork || isConnection,
+    errorCode,
+    message,
+  }
+}
+
+const markTransientFailureForCooldown = () => {
+  timeoutBurstCount += 1
+  const cooldownStep = Math.max(0, timeoutBurstCount - 3)
+  const cooldownMs = Math.min(API_COOLDOWN_MAX_MS, API_COOLDOWN_BASE_MS * (2 ** cooldownStep))
+  if (timeoutBurstCount >= 3) {
+    apiCooldownUntilTs = Math.max(apiCooldownUntilTs, Date.now() + cooldownMs)
+  }
+}
+
+const markApiSuccess = () => {
+  timeoutBurstCount = Math.max(0, timeoutBurstCount - 1)
+  if (timeoutBurstCount === 0) {
+    apiCooldownUntilTs = 0
+  }
+}
 
 const shouldThrottleErrorLog = (key) => {
   const now = Date.now()
@@ -21,6 +72,8 @@ const shouldThrottleErrorLog = (key) => {
   errorThrottleMap.set(key, now)
   return false
 }
+
+export const shouldThrottleClientNoise = (key) => shouldThrottleErrorLog(`client|${String(key || '')}`)
 
 const logEvent = (type, message, severity = 'info', meta = {}) => {
   try {
@@ -45,6 +98,8 @@ api.interceptors.request.use(
 
 api.interceptors.response.use(
   (response) => {
+    markApiSuccess()
+
     const startedAt = response?.config?.metadata?.startedAt || Date.now()
     const durationMs = Date.now() - startedAt
     logEvent('api_response', `${response?.config?.method || 'get'} ${response?.config?.url || ''}`, 'info', {
@@ -54,30 +109,42 @@ api.interceptors.response.use(
     return response
   },
   (error) => {
-    const errorCode = String(error?.code || '').toUpperCase()
+    const {
+      isTransient,
+      isAbort,
+      errorCode,
+      message,
+    } = classifyTransientNetworkError(error)
     const rawMessage = String(error?.message || '')
-    const message = rawMessage.toLowerCase()
     const url = error?.config?.url || ''
     const method = error?.config?.method
     const startedAt = error?.config?.metadata?.startedAt || Date.now()
     const durationMs = Date.now() - startedAt
 
     // Common harmless noise while network path flips or requests are canceled.
-    if (errorCode === 'ERR_CANCELED' || message.includes('canceled')) {
+    if (isAbort) {
       return Promise.reject(error)
+    }
+
+    if (isTransient) {
+      markTransientFailureForCooldown()
     }
 
     const isNetworkChanged = errorCode === 'ERR_NETWORK_CHANGED' || message.includes('network changed')
     const isSensorPoll = url.includes('/sensors/latest') || url.includes('/sensors/history')
     const throttleKey = `${method || 'get'}|${url}|${errorCode || message}`
 
-    if (!(isSensorPoll || isNetworkChanged) || !shouldThrottleErrorLog(throttleKey)) {
+    const shouldSuppress = isTransient && shouldThrottleErrorLog(throttleKey)
+    if (!shouldSuppress) {
       logEvent('api_response_error', error?.message || 'api error', isNetworkChanged ? 'warning' : 'error', {
         status: error?.response?.status,
         url,
         method,
         durationMs,
         code: errorCode || undefined,
+        cooldownActive: isApiCoolingDown(),
+        cooldownRemainingMs: getApiCooldownRemainingMs(),
+        noisyEndpoint: isSensorPoll,
       })
     }
 
@@ -92,6 +159,7 @@ export const cameraAPI = {
   getEnabled: () => api.get('/camera/enabled'),
   getFrame: (cameraId = 'cam1') => api.get(`/camera/frame?camera_id=${encodeURIComponent(cameraId)}`),
   getStream: (cameraId = 'cam1') => `${API_BASE}/api/camera/stream?camera_id=${encodeURIComponent(cameraId)}`,
+  getH264Stream: (cameraId = 'cam1') => `${API_BASE}/api/camera/stream_h264?camera_id=${encodeURIComponent(cameraId)}`,
   prewarm: (cameraIds = ['cam1', 'cam2'], requestConfig = {}) =>
     api.post('/camera/prewarm', { camera_ids: cameraIds }, requestConfig),
   recover: (reason = 'manual_operator_recover', cameraId = 'cam1') =>

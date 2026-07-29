@@ -33,6 +33,9 @@ from .config import (
     CAMERA_DEFAULT_ID,
     CAMERA_DIRECT_V4L2_TUNE,
     CAMERA_REQUIRE_HARDWARE_ACCEL,
+    CAMERA_RECOVERY_BASE_BACKOFF_SECONDS,
+    CAMERA_RECOVERY_BACKOFF_MAX_SECONDS,
+    CAMERA_RECOVERY_MIN_REINIT_INTERVAL_SECONDS,
     CAMERA_BUFFER_FLUSH_GRABS,
     CAMERA2_EXPOSURE_ADAPT_INTERVAL_SECONDS,
     CAMERA2_EXPOSURE_STEP,
@@ -234,10 +237,12 @@ class CameraCapture:
         self._recovery_success_count = 0
         self._recovery_failed_count = 0
         self._consecutive_recovery_failures = 0
-        self._recovery_base_backoff_seconds = 1.5
-        self._recovery_backoff_max_seconds = 20.0
+        self._recovery_base_backoff_seconds = float(CAMERA_RECOVERY_BASE_BACKOFF_SECONDS)
+        self._recovery_backoff_max_seconds = float(CAMERA_RECOVERY_BACKOFF_MAX_SECONDS)
+        self._recovery_min_reinit_interval_seconds = float(CAMERA_RECOVERY_MIN_REINIT_INTERVAL_SECONDS)
         self._next_recovery_allowed_ts = 0.0
         self._last_recovery_ts = None
+        self._last_reinit_attempt_ts = 0.0
         self._last_recovery_reason = None
         self._adaptive_exposure_enabled = bool(
             CAMERA2_ADAPTIVE_EXPOSURE and self.camera_id == "cam2" and not self.auto_brightness_enabled
@@ -442,7 +447,14 @@ class CameraCapture:
         if now_ts < self._next_recovery_allowed_ts:
             return False
 
+        if (
+            self._last_reinit_attempt_ts
+            and (now_ts - self._last_reinit_attempt_ts) < self._recovery_min_reinit_interval_seconds
+        ):
+            return False
+
         self._recovery_attempt_count += 1
+        self._last_reinit_attempt_ts = now_ts
         logger.info("Attempting camera recovery #%s (%s)", self._recovery_attempt_count, reason)
         self._initialize_camera()
         success = bool(self.is_open and self.cap is not None)
@@ -1178,6 +1190,18 @@ class CameraCapture:
     def _initialize_camera(self):
         """Initialize camera capture"""
         try:
+            now_ts = time.time()
+            if (
+                self._last_reinit_attempt_ts
+                and (now_ts - self._last_reinit_attempt_ts) < self._recovery_min_reinit_interval_seconds
+            ):
+                self.last_camera_error = (
+                    "Reinitialize throttled due to minimum reinit interval"
+                )
+                return
+
+            self._last_reinit_attempt_ts = now_ts
+
             if self.cap is not None:
                 try:
                     self.cap.release()
