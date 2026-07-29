@@ -385,6 +385,10 @@ export const VideoStream = ({
   }
 
   const onMjpegLoaded = () => {
+    if (!fallbackActiveRef.current) {
+      return
+    }
+
     clearMjpegRetryTimer()
     clearMjpegConnectWatchdogTimer()
     mjpegRetryCountRef.current = 0
@@ -396,6 +400,10 @@ export const VideoStream = ({
   }
 
   const onMjpegError = () => {
+    if (!fallbackActiveRef.current) {
+      return
+    }
+
     const baseUrl = getBaseUrl()
     const nextAttempt = mjpegRetryCountRef.current + 1
     mjpegRetryCountRef.current = nextAttempt
@@ -605,20 +613,19 @@ export const VideoStream = ({
       </div>
 
       <div className="video-controls">
-        {!isConnected ? (
+        {!isConnected && !isConnecting ? (
           <button
             onClick={connectStream}
-            disabled={isConnecting}
             className="btn btn-primary"
           >
-            {isConnecting ? 'Connecting...' : startLabel}
+            {startLabel}
           </button>
         ) : (
           <button
             onClick={disconnect}
             className="btn btn-danger"
           >
-            {stopLabel}
+            {isConnecting ? 'Cancel Connect' : stopLabel}
           </button>
         )}
 
