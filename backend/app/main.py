@@ -1233,6 +1233,8 @@ async def stop_camera(request: dict = None):
     request = request or {}
     camera_id = _resolve_camera_id(request.get("camera_id") or CAMERA_DEFAULT_ID)
     stream_session_id = request.get("stream_session_id")
+    force = bool(request.get("force", False))
+    cleared_sessions = 0
 
     # Explicitly unregister the caller's MJPEG session for immediate stats update.
     if stream_session_id:
@@ -1240,6 +1242,12 @@ async def stop_camera(request: dict = None):
             _ensure_camera_session_bucket(camera_id)
             if stream_session_id in active_mjpeg_sessions[camera_id]:
                 active_mjpeg_sessions[camera_id].discard(stream_session_id)
+
+    if force:
+        async with active_mjpeg_lock:
+            _ensure_camera_session_bucket(camera_id)
+            cleared_sessions = len(active_mjpeg_sessions[camera_id])
+            active_mjpeg_sessions[camera_id].clear()
 
     # Give stream generators a short moment to observe disconnection and decrement counters.
     await asyncio.sleep(0.35)
@@ -1257,7 +1265,11 @@ async def stop_camera(request: dict = None):
 
     camera = get_camera(camera_id)
     released = False
-    if camera is not None:
+    if force:
+        release_camera(camera_id)
+        released = True
+        camera = get_camera(camera_id, create_if_missing=False)
+    elif camera is not None:
         released = camera.maybe_release_if_idle(
             idle_seconds=0,
             active_mjpeg_clients=current_mjpeg_clients,
@@ -1270,6 +1282,8 @@ async def stop_camera(request: dict = None):
         "camera_id": camera_id,
         "released": released,
         "stream_session_id": stream_session_id,
+        "force": force,
+        "cleared_sessions": int(cleared_sessions),
         "active_mjpeg_clients": current_mjpeg_clients,
         "webrtc_connections": current_webrtc_connections,
         "camera_open": bool(camera and camera.is_open),

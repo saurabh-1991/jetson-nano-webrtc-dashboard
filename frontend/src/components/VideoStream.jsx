@@ -266,16 +266,39 @@ export const VideoStream = ({
       popoutRef.current = null
     }
 
+    const stopPayload = {
+      camera_id: cameraId,
+      stream_session_id: streamSessionIdRef.current,
+    }
+
     // Best-effort camera release request. Backend releases only when no active viewers.
     fetch(`${baseUrl}/api/camera/stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        camera_id: cameraId,
-        stream_session_id: streamSessionIdRef.current
-      })
+      body: JSON.stringify(stopPayload)
     }).catch((err) => {
       console.warn('Camera stop request failed:', err)
+    })
+
+    // Follow-up forced cleanup sweeps for network-jitter cases where browser-side
+    // stream sockets can remain half-open and keep backend MJPEG sessions alive.
+    ;[1200, 3000].forEach((delayMs) => {
+      setTimeout(() => {
+        if (fallbackActiveRef.current) {
+          return
+        }
+
+        fetch(`${baseUrl}/api/camera/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...stopPayload,
+            force: true,
+          })
+        }).catch(() => {
+          // best effort
+        })
+      }, delayMs)
     })
   }
 
