@@ -449,6 +449,28 @@ class CameraCapture:
         self._record_recovery_result(success, reason)
         return success
 
+    def _degrade_cam2_pipeline_preferences_for_recovery(self, reason: str):
+        """When cam2 gets stuck with zero-frame reads, relax strict pipeline prefs.
+
+        This is intentionally conservative: it only triggers for cam2 and only when
+        the currently selected pipeline is a GRAY8-preferred path.
+        """
+        if self.camera_id != "cam2":
+            return
+        if not self.prefer_gray8:
+            return
+
+        selected = str(self.selected_pipeline or "").lower()
+        source = str(self.selected_pipeline_source or "").lower()
+        if "gray8" not in selected and "gray8" not in source:
+            return
+
+        self.prefer_gray8 = False
+        logger.warning(
+            "Cam2 recovery fallback engaged (%s): disabling GRAY8-preferred pipeline for reinitialize",
+            reason,
+        )
+
     def _discover_v4l2_devices(self) -> list:
         """Discover available /dev/video* nodes sorted by numeric index."""
         return _discover_v4l2_devices_static()
@@ -1586,6 +1608,7 @@ class CameraCapture:
                             "Consecutive camera frame failures reached threshold (%s). Cycling camera.",
                             self._max_consecutive_read_failures,
                         )
+                        self._degrade_cam2_pipeline_preferences_for_recovery("consecutive_frame_read_failures")
                         if self.cap is not None:
                             try:
                                 self.cap.release()
@@ -1607,6 +1630,7 @@ class CameraCapture:
                         self.camera_id,
                         self.consecutive_stall_limit,
                     )
+                    self._degrade_cam2_pipeline_preferences_for_recovery("consecutive_slow_frame_reads")
                     if self.cap is not None:
                         try:
                             self.cap.release()
