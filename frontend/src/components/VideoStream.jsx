@@ -31,6 +31,7 @@ export const VideoStream = ({
   const pcRef = useRef(null)
   const fallbackActiveRef = useRef(false)
   const mjpegRetryTimerRef = useRef(null)
+  const mjpegConnectWatchdogTimerRef = useRef(null)
   const mjpegRetryCountRef = useRef(0)
   const statsPollTimerRef = useRef(null)
   const statsPollInFlightRef = useRef(false)
@@ -60,6 +61,13 @@ export const VideoStream = ({
     }
   }
 
+  const clearMjpegConnectWatchdogTimer = () => {
+    if (mjpegConnectWatchdogTimerRef.current) {
+      clearTimeout(mjpegConnectWatchdogTimerRef.current)
+      mjpegConnectWatchdogTimerRef.current = null
+    }
+  }
+
   const clearStatsPollTimer = () => {
     if (statsPollTimerRef.current) {
       clearTimeout(statsPollTimerRef.current)
@@ -71,6 +79,7 @@ export const VideoStream = ({
     fallbackActiveRef.current = true
     closePeerConnection()
     clearMjpegRetryTimer()
+    clearMjpegConnectWatchdogTimer()
 
     setNotice(reason || 'Using MJPEG fallback stream')
     setStreamMode('mjpeg')
@@ -236,6 +245,7 @@ export const VideoStream = ({
   const disconnect = () => {
     const baseUrl = getBaseUrl()
     clearMjpegRetryTimer()
+    clearMjpegConnectWatchdogTimer()
     fallbackActiveRef.current = false
     mjpegRetryCountRef.current = 0
     closePeerConnection()
@@ -376,6 +386,7 @@ export const VideoStream = ({
 
   const onMjpegLoaded = () => {
     clearMjpegRetryTimer()
+    clearMjpegConnectWatchdogTimer()
     mjpegRetryCountRef.current = 0
     setMjpegGuardActive(false)
     setError(null)
@@ -482,9 +493,44 @@ export const VideoStream = ({
     return () => {
       clearStatsPollTimer()
       clearMjpegRetryTimer()
+      clearMjpegConnectWatchdogTimer()
       disconnect()
     }
   }, [])
+
+  useEffect(() => {
+    if (!(streamMode === 'mjpeg' && isConnecting && !isConnected && mjpegUrl)) {
+      clearMjpegConnectWatchdogTimer()
+      return
+    }
+
+    clearMjpegConnectWatchdogTimer()
+    mjpegConnectWatchdogTimerRef.current = setTimeout(() => {
+      if (!fallbackActiveRef.current) {
+        return
+      }
+
+      const baseUrl = getBaseUrl()
+      const nextAttempt = mjpegRetryCountRef.current + 1
+      mjpegRetryCountRef.current = nextAttempt
+
+      const guardMode = nextAttempt >= 4
+      setMjpegGuardActive(guardMode)
+      setError(
+        guardMode
+          ? 'Camera reconnect guard active: retrying every 5s to avoid thrashing.'
+          : `MJPEG stream connect timeout, retrying (${nextAttempt})...`
+      )
+
+      setMjpegUrl(
+        `${baseUrl}/api/camera/stream?camera_id=${encodeURIComponent(cameraId)}&sid=${encodeURIComponent(streamSessionIdRef.current)}&t=${Date.now()}`
+      )
+    }, 6000)
+
+    return () => {
+      clearMjpegConnectWatchdogTimer()
+    }
+  }, [streamMode, isConnecting, isConnected, mjpegUrl, cameraId])
 
   const mjpegViewers = Number(liveStats?.cameraScoped?.active_mjpeg_clients ?? 0)
   const webrtcViewers = Number(liveStats?.webrtc_connections || 0)

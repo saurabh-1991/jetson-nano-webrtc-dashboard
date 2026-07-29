@@ -45,6 +45,38 @@ function formatGiB(bytes) {
   return `${(num / (1024 ** 3)).toFixed(2)} GB`
 }
 
+function pickCameraMp4Path(files, cameraId, manifest = null) {
+  const cameraKey = String(cameraId || '').toLowerCase()
+  if (!cameraKey) return ''
+
+  const manifestSegments = Array.isArray(manifest?.video?.[cameraKey]?.segments)
+    ? manifest.video[cameraKey].segments
+    : []
+
+  const fromManifest = manifestSegments
+    .map((seg) => seg?.path || seg?.relative_path)
+    .find((rel) => typeof rel === 'string' && rel.toLowerCase().endsWith('.mp4'))
+
+  if (fromManifest) {
+    return fromManifest
+  }
+
+  const directManifestPath = manifest?.video?.[cameraKey]?.latest_path || manifest?.video?.[cameraKey]?.path
+  if (typeof directManifestPath === 'string' && directManifestPath.toLowerCase().endsWith('.mp4')) {
+    return directManifestPath
+  }
+
+  const cameraPattern = new RegExp(`(^|[\\/_.-])${cameraKey}([\\/_.-]|$)`, 'i')
+
+  const matched = (Array.isArray(files) ? files : [])
+    .map((item) => item?.relative_path)
+    .filter((rel) => typeof rel === 'string' && rel.toLowerCase().endsWith('.mp4'))
+    .filter((rel) => cameraPattern.test(rel))
+    .sort()
+
+  return matched[0] || ''
+}
+
 export const ExperimentControl = ({
   title = 'Experiment Control',
   showHistory = true,
@@ -329,6 +361,7 @@ export const ExperimentControl = ({
       setError(null)
       const artifacts = await experimentsAPI.getArtifacts(runId)
       const files = Array.isArray(artifacts?.data?.files) ? artifacts.data.files : []
+      const manifest = artifacts?.data?.manifest || null
       const mp4Files = files
         .map((item) => item?.relative_path)
         .filter((rel) => typeof rel === 'string' && rel.toLowerCase().endsWith('.mp4'))
@@ -349,9 +382,8 @@ export const ExperimentControl = ({
         return
       }
 
-      const sorted = [...mp4Files].sort()
-      const cam1Path = sorted.find((p) => p.toLowerCase().includes('cam1/')) || sorted[0] || ''
-      const cam2Path = sorted.find((p) => p.toLowerCase().includes('cam2/')) || sorted[1] || ''
+      const cam1Path = pickCameraMp4Path(files, 'cam1', manifest)
+      const cam2Path = pickCameraMp4Path(files, 'cam2', manifest)
       const nonce = Date.now()
 
       setPlaybackRunId(runId)

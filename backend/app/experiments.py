@@ -180,7 +180,7 @@ class ExperimentManager:
         last_direct_pull_ts = 0.0
 
         try:
-            from .camera import get_camera
+            from .camera import get_camera, release_camera
             camera = get_camera(camera_id)
         except Exception as e:
             logger.warning("Video worker camera init failed for %s: %s", camera_id, e)
@@ -311,6 +311,8 @@ class ExperimentManager:
 
         frame_interval = 1.0 / float(max(1, int(EXPERIMENTS_VIDEO_FPS)))
         next_tick = time.time()
+        consecutive_no_frame = 0
+        last_rebind_attempt_ts = 0.0
 
         while not stop_event.is_set():
             try:
@@ -326,8 +328,26 @@ class ExperimentManager:
                     last_direct_pull_ts = now_ts
 
                 if not ok or frame is None:
+                    consecutive_no_frame += 1
+
+                    # If camera keeps returning no frames, try a controlled rebind.
+                    if consecutive_no_frame >= 16 and (now_ts - last_rebind_attempt_ts) >= 2.0:
+                        last_rebind_attempt_ts = now_ts
+                        try:
+                            release_camera(camera_id)
+                            camera = get_camera(camera_id)
+                            logger.warning(
+                                "Video worker rebind attempted for %s after %s consecutive empty frames",
+                                camera_id,
+                                consecutive_no_frame,
+                            )
+                        except Exception as rebind_err:
+                            logger.warning("Video worker rebind failed for %s: %s", camera_id, rebind_err)
+
                     time.sleep(0.02)
                     continue
+
+                consecutive_no_frame = 0
 
                 if writer is None:
                     _start_segment(frame)
@@ -371,6 +391,10 @@ class ExperimentManager:
                 v = self._active_run["manifest"]["video"][camera_id]
                 if v.get("state") != "error":
                     v["state"] = "completed"
+                if int(frame_count) <= 0 and not v.get("segments"):
+                    v["state"] = "no_frames"
+                    if not v.get("error"):
+                        v["error"] = "No frames captured for this camera during run"
                 v["stopped_at"] = _iso_utc_now()
                 v["frames"] = int(frame_count)
                 v["duration_seconds"] = round(time.time() - started_epoch, 3)
@@ -527,9 +551,27 @@ class ExperimentManager:
             if EXPERIMENTS_VIDEO_ENABLED:
                 try:
                     from .camera import get_camera_ids
+                    from .camera import get_camera
                     camera_ids = list(get_camera_ids() or [])
                 except Exception:
                     camera_ids = ["cam1", "cam2"]
+
+                # Best-effort prewarm so recording starts even when operators
+                # had just stopped live streams before pressing Start Run.
+                for camera_id in camera_ids:
+                    try:
+                        cam = get_camera(camera_id)
+                        warmed = False
+                        for _ in range(4):
+                            ok, _frame = cam.get_frame()
+                            if ok:
+                                warmed = True
+                                break
+                            time.sleep(0.12)
+                        if not warmed:
+                            logger.warning("Experiment prewarm did not receive initial frame for %s", camera_id)
+                    except Exception as warm_err:
+                        logger.warning("Experiment prewarm failed for %s: %s", camera_id, warm_err)
 
                 for camera_id in camera_ids:
                     t = threading.Thread(

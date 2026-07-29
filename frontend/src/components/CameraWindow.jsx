@@ -5,18 +5,36 @@ import './CameraWindow.css'
 
 const REQUEST_TIMEOUT = 9000
 
-function pickCameraVideoPath(files, cameraId) {
-  const mp4Files = (Array.isArray(files) ? files : [])
-    .map((item) => item?.relative_path)
-    .filter((rel) => typeof rel === 'string' && rel.toLowerCase().endsWith('.mp4'))
+function pickCameraVideoPath(files, cameraId, manifest = null) {
+  const cameraKey = String(cameraId || '').toLowerCase()
+  if (!cameraKey) return ''
 
-  if (mp4Files.length === 0) {
-    return ''
+  const manifestSegments = Array.isArray(manifest?.video?.[cameraKey]?.segments)
+    ? manifest.video[cameraKey].segments
+    : []
+
+  const fromManifest = manifestSegments
+    .map((seg) => seg?.path || seg?.relative_path)
+    .find((rel) => typeof rel === 'string' && rel.toLowerCase().endsWith('.mp4'))
+
+  if (fromManifest) {
+    return fromManifest
   }
 
-  const sorted = [...mp4Files].sort()
-  const preferred = sorted.find((p) => p.toLowerCase().includes(`${cameraId.toLowerCase()}/`))
-  return preferred || sorted[0] || ''
+  const directManifestPath = manifest?.video?.[cameraKey]?.latest_path || manifest?.video?.[cameraKey]?.path
+  if (typeof directManifestPath === 'string' && directManifestPath.toLowerCase().endsWith('.mp4')) {
+    return directManifestPath
+  }
+
+  const cameraPattern = new RegExp(`(^|[\\/_.-])${cameraKey}([\\/_.-]|$)`, 'i')
+
+  const matched = (Array.isArray(files) ? files : [])
+    .map((item) => item?.relative_path)
+    .filter((rel) => typeof rel === 'string' && rel.toLowerCase().endsWith('.mp4'))
+    .filter((rel) => cameraPattern.test(rel))
+    .sort()
+
+  return matched[0] || ''
 }
 
 export default function CameraWindow({
@@ -103,7 +121,8 @@ export default function CameraWindow({
 
       const artifacts = await experimentsAPI.getArtifacts(selectedRunId)
       const files = Array.isArray(artifacts?.data?.files) ? artifacts.data.files : []
-      const selectedPath = pickCameraVideoPath(files, cameraId)
+      const manifest = artifacts?.data?.manifest || null
+      const selectedPath = pickCameraVideoPath(files, cameraId, manifest)
 
       if (!selectedPath) {
         setError(`No ${cameraId.toUpperCase()} recording found in selected run.`)
