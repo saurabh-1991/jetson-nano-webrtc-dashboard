@@ -5,7 +5,8 @@ const MAX_QUEUE = 400
 const FLUSH_INTERVAL_MS = 5000
 const FLUSH_MAX_INTERVAL_MS = 30000
 const HEARTBEAT_INTERVAL_MS = 5000
-const HEARTBEAT_MAX_INTERVAL_MS = 60000
+// Keep heartbeat retry ceiling below backend watchdog timeout (default 20s).
+const HEARTBEAT_MAX_INTERVAL_MS = 15000
 const DUPLICATE_WINDOW_MS = 15000
 
 const queue = []
@@ -153,12 +154,6 @@ const getHeartbeatDelayMs = () => {
 }
 
 const sendHeartbeat = async () => {
-  const cooldown = getApiCooldownState()
-  if (cooldown.active) {
-    heartbeatFailureCount = Math.min(heartbeatFailureCount + 1, 6)
-    return false
-  }
-
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     heartbeatFailureCount = Math.min(heartbeatFailureCount + 1, 6)
     return false
@@ -192,10 +187,7 @@ const scheduleHeartbeat = (delayMs = HEARTBEAT_INTERVAL_MS) => {
 
   heartbeatTimer = window.setTimeout(async () => {
     await sendHeartbeat()
-    const cooldown = getApiCooldownState()
-    const nextDelay = cooldown.active
-      ? Math.max(getHeartbeatDelayMs(), cooldown.remainingMs + 300)
-      : getHeartbeatDelayMs()
+    const nextDelay = getHeartbeatDelayMs()
     scheduleHeartbeat(nextDelay)
   }, delayMs)
 }
