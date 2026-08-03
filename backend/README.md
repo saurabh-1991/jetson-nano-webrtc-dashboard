@@ -9,6 +9,7 @@ This backend provides:
 - WebRTC streaming from the Jetson Nano camera (when `aiortc` stack is available)
 - MJPEG fallback camera streaming
 - GPIO REST API for LED control
+- Delta MS300 VFD REST API for run/stop and speed setpoint (Modbus TCP)
 - WebSocket real-time status updates
 - System and application status endpoints
 - CUDA-aware OpenCV processing
@@ -41,6 +42,7 @@ React Frontend Dashboard
 - **MJPEG fallback stream** with per-camera session tracking
 - **Camera resilience and recovery** (auto fallback, fail-safe counters, manual recover endpoint)
 - **GPIO control** via legacy endpoints and named-output endpoints
+- **VFD control** with guarded Modbus TCP writes and speed-range validation
 - **System status APIs** for camera/CUDA/GPIO/WebSocket/sensor visibility
 - **Rolling diagnostics + safety watchdog hooks** for backend and frontend events
 - **CUDA-aware processing** with GPU acceleration when available
@@ -131,6 +133,13 @@ Key settings:
 - `CUDA_ENABLED` — enable/disable CUDA processing
 - `PROCESSING_SCALE` — resize dimensions for frame processing
 - `GPIO_LED_PIN`, `GPIO_BUTTON_PIN`
+- `VFD_ENABLED` — enable/disable VFD control (`false` by default for safe rollout)
+- `VFD_HOST`, `VFD_PORT`, `VFD_SLAVE_ID`, `VFD_TIMEOUT_SECONDS`
+- `VFD_MIN_SPEED_HZ`, `VFD_MAX_SPEED_HZ`, `VFD_DEFAULT_SPEED_HZ`
+- `VFD_SPEED_SCALE` — register scaling factor (`100` means 0.01 Hz units)
+- `VFD_RUN_COMMAND_REGISTER`, `VFD_SPEED_COMMAND_REGISTER`
+- `VFD_RUN_FORWARD_WORD`, `VFD_STOP_WORD`
+- `VFD_MIN_WRITE_INTERVAL_MS` — minimum delay between control writes
 - `API_HOST`, `API_PORT`
 - `STUN_SERVERS` — used by WebRTC
 - `MEDIA_WEBRTC_GATEWAY_ENABLED` — toggles optional external gateway profile exposure to frontend (`false` by default)
@@ -237,6 +246,17 @@ Slice A scope currently focuses on control plane + sensor evidence writing (vide
   - `POST /api/gpio/off`
   - `POST /api/gpio/toggle`
 
+### VFD (Delta MS300 over Modbus TCP)
+
+- `GET /api/vfd/status` — control availability + cached state
+- `POST /api/vfd/run` with `{ "run": true|false }` — start/stop command
+- `POST /api/vfd/speed` with `{ "speed_hz": number }` — set speed setpoint in Hz
+
+Important safety note:
+
+- Keep `VFD_ENABLED=false` until MS300 communication settings and register map are verified from your exact datasheet/parameter profile.
+- Default register values are common Delta mappings and may need adjustment in your installation.
+
 ### WebRTC
 
 - `POST /api/webrtc/offer` — accept browser SDP offer and return SDP answer
@@ -287,6 +307,14 @@ GPIO state management.
   - `toggle_led()`
   - `get_led_state()`
   - `cleanup()`
+
+### `app/vfd_control.py`
+VFD state and Modbus TCP write path.
+
+- validates config readiness before any write
+- rate-limits write cadence to prevent burst toggles
+- enforces speed-range bounds
+- exposes cached status for frontend rendering
 
 ### `app/webrtc.py`
 WebRTC stream handling.

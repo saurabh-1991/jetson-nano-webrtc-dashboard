@@ -29,6 +29,20 @@ services:
       - MEDIA_WEBRTC_GATEWAY_WHEP_TEMPLATE
       - MEDIA_WEBRTC_GATEWAY_CAM1_WHEP_URL
       - MEDIA_WEBRTC_GATEWAY_CAM2_WHEP_URL
+      - VFD_ENABLED=false
+      - VFD_HOST=
+      - VFD_PORT=502
+      - VFD_SLAVE_ID=1
+      - VFD_TIMEOUT_SECONDS=1.0
+      - VFD_MIN_SPEED_HZ=0.0
+      - VFD_MAX_SPEED_HZ=50.0
+      - VFD_DEFAULT_SPEED_HZ=0.0
+      - VFD_SPEED_SCALE=100
+      - VFD_RUN_COMMAND_REGISTER=8192
+      - VFD_SPEED_COMMAND_REGISTER=8193
+      - VFD_RUN_FORWARD_WORD=1
+      - VFD_STOP_WORD=0
+      - VFD_MIN_WRITE_INTERVAL_MS=150
     volumes:
       - /dev:/dev
       - /mnt/usb_recordings:/mnt/usb_recordings

@@ -492,6 +492,27 @@ PROCESSING_SCALE = (640, 480)
 GPIO_LED_PIN = 12
 GPIO_BUTTON_PIN = 16
 
+# Delta VFD (MS300) Modbus TCP control configuration.
+# Keep disabled by default until networking/register mapping is verified on-site.
+VFD_ENABLED = _parse_bool_with_default("VFD_ENABLED", False)
+VFD_HOST = os.getenv("VFD_HOST", "").strip()
+VFD_PORT = max(1, int(os.getenv("VFD_PORT", "502")))
+VFD_SLAVE_ID = max(1, int(os.getenv("VFD_SLAVE_ID", "1")))
+VFD_TIMEOUT_SECONDS = max(0.2, float(os.getenv("VFD_TIMEOUT_SECONDS", "1.0")))
+VFD_MIN_SPEED_HZ = float(os.getenv("VFD_MIN_SPEED_HZ", "0.0"))
+VFD_MAX_SPEED_HZ = float(os.getenv("VFD_MAX_SPEED_HZ", "50.0"))
+VFD_DEFAULT_SPEED_HZ = float(os.getenv("VFD_DEFAULT_SPEED_HZ", "0.0"))
+VFD_SPEED_SCALE = max(1, int(os.getenv("VFD_SPEED_SCALE", "100")))
+
+# Defaults match common Delta profiles but must be verified against MS300 datasheet.
+VFD_RUN_COMMAND_REGISTER = int(os.getenv("VFD_RUN_COMMAND_REGISTER", "8192"))
+VFD_SPEED_COMMAND_REGISTER = int(os.getenv("VFD_SPEED_COMMAND_REGISTER", "8193"))
+VFD_RUN_FORWARD_WORD = int(os.getenv("VFD_RUN_FORWARD_WORD", "1"))
+VFD_STOP_WORD = int(os.getenv("VFD_STOP_WORD", "0"))
+
+# Rate limit control writes to avoid burst toggling from UI retries.
+VFD_MIN_WRITE_INTERVAL_MS = max(50, int(os.getenv("VFD_MIN_WRITE_INTERVAL_MS", "150")))
+
 # FastAPI Configuration
 API_HOST = "0.0.0.0"
 API_PORT = 8000

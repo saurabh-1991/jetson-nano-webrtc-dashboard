@@ -72,6 +72,8 @@ from .camera import (
 )
 from .gpio_control import get_gpio_controller
 from . import gpio_control as gpio_module
+from .vfd_control import get_vfd_controller
+from . import vfd_control as vfd_module
 from .sensor_data import get_sensor_data_service
 from .event_logger import get_event_logger
 from .experiments import get_experiment_manager
@@ -1051,23 +1053,38 @@ async def safety_watchdog_loop():
             stale_control = (now_ts - last_control_activity_ts) > CONTROL_HEARTBEAT_TIMEOUT_SECONDS
 
             if stale_frontend and stale_control:
+                vfd = get_vfd_controller()
+                vfd_status = vfd.get_status()
+                vfd_was_running = bool(vfd_status.get("is_running"))
+                vfd_stopped = True
+                if vfd_was_running:
+                    vfd_stopped = vfd.force_stop(reason="safety_watchdog_timeout")
+
                 gpio = get_gpio_controller()
-                if gpio.any_output_on():
+                gpio_was_on = gpio.any_output_on()
+                if gpio_was_on:
                     success = gpio.force_all_outputs_off(reason="safety_watchdog_timeout")
+                else:
+                    success = True
+
+                if gpio_was_on or vfd_was_running:
                     safety_reset_count += 1
                     event_log.log_event(
                         source="backend",
                         event_type="safety_watchdog_reset",
                         severity="warning",
                         payload={
-                            "success": bool(success),
+                            "success": bool(success and vfd_stopped),
+                            "gpio_success": bool(success),
+                            "vfd_success": bool(vfd_stopped),
                             "timeout_seconds": CONTROL_HEARTBEAT_TIMEOUT_SECONDS,
                             "safety_reset_count": safety_reset_count,
                         },
                     )
                     logger.warning(
-                        "Safety watchdog triggered fail-safe reset. success=%s count=%s",
+                        "Safety watchdog triggered fail-safe reset. gpio_success=%s vfd_success=%s count=%s",
                         success,
+                        vfd_stopped,
                         safety_reset_count,
                     )
         except asyncio.CancelledError:
@@ -1087,6 +1104,11 @@ def cleanup_resources():
             gpio_module.gpio_controller.cleanup()
     except Exception as e:
         logger.warning(f"GPIO cleanup failed at exit: {e}")
+    try:
+        if getattr(vfd_module, 'vfd_controller', None) is not None:
+            vfd_module.vfd_controller.cleanup()
+    except Exception as e:
+        logger.warning(f"VFD cleanup failed at exit: {e}")
 
 
 atexit.register(cleanup_resources)
@@ -1165,6 +1187,8 @@ async def on_shutdown():
     release_all_cameras()
     if getattr(gpio_module, 'gpio_controller', None) is not None:
         gpio_module.gpio_controller.cleanup()
+    if getattr(vfd_module, 'vfd_controller', None) is not None:
+        vfd_module.vfd_controller.cleanup()
 
 # Add CORS middleware
 app.add_middleware(
@@ -1177,7 +1201,7 @@ app.add_middleware(
 
 
 def _is_control_path(path: str) -> bool:
-    return path.startswith("/api/gpio") or path.startswith("/api/system/status")
+    return path.startswith("/api/gpio") or path.startswith("/api/vfd") or path.startswith("/api/system/status")
 
 
 @app.middleware("http")
@@ -2352,6 +2376,92 @@ async def gpio_toggle():
         "success": result,
         "gpio": gpio.get_led_state(),
         "timestamp": datetime.now().isoformat()
+    }
+
+
+# ==================== VFD ENDPOINTS ====================
+
+@app.get("/api/vfd/status")
+async def vfd_status():
+    """Get VFD control availability and cached runtime state."""
+    vfd = get_vfd_controller()
+    return {
+        "success": True,
+        "vfd": vfd.get_status(),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.post("/api/vfd/run")
+async def vfd_run(payload: Dict[str, Any]):
+    """Set VFD run state (true=start, false=stop)."""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    run = payload.get("run")
+    if not isinstance(run, bool):
+        raise HTTPException(status_code=400, detail="'run' must be boolean")
+
+    vfd = get_vfd_controller()
+    result = await run_in_threadpool(vfd.set_run_state, run)
+    state = vfd.get_status()
+
+    get_event_logger().log_event(
+        source="backend",
+        event_type="vfd_run_state_set",
+        severity="info" if result else "warning",
+        payload={
+            "message": f"VFD run state set to {'RUN' if run else 'STOP'} ({'success' if result else 'failed'})",
+            "run": bool(run),
+            "result": bool(result),
+            "vfd_state": state,
+        },
+    )
+
+    return {
+        "success": bool(result),
+        "vfd": state,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.post("/api/vfd/speed")
+async def vfd_speed(payload: Dict[str, Any]):
+    """Set VFD speed setpoint in Hz."""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    speed_hz = payload.get("speed_hz")
+
+    vfd = get_vfd_controller()
+    result = await run_in_threadpool(vfd.set_speed_hz, speed_hz)
+    state = vfd.get_status()
+    ok = bool(result.get("success"))
+
+    severity = "info" if ok else "warning"
+    get_event_logger().log_event(
+        source="backend",
+        event_type="vfd_speed_set",
+        severity=severity,
+        payload={
+            "message": (
+                f"VFD speed set to {result.get('speed_hz')} Hz"
+                if ok
+                else f"VFD speed set failed: {result.get('error')}"
+            ),
+            "result": result,
+            "vfd_state": state,
+        },
+    )
+
+    if not ok and result.get("error") == "speed_out_of_range":
+        raise HTTPException(status_code=400, detail=result)
+
+    return {
+        "success": ok,
+        "result": result,
+        "vfd": state,
+        "timestamp": datetime.now().isoformat(),
     }
 
 

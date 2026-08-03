@@ -180,6 +180,13 @@ export const gpioAPI = {
   toggle: () => api.post('/gpio/toggle'),
 }
 
+// VFD endpoints
+export const vfdAPI = {
+  getStatus: () => api.get('/vfd/status'),
+  setRun: (run) => api.post('/vfd/run', { run: !!run }),
+  setSpeed: (speedHz) => api.post('/vfd/speed', { speed_hz: speedHz }),
+}
+
 // System endpoints
 export const systemAPI = {
   getInfo: () => api.get('/system/info'),
