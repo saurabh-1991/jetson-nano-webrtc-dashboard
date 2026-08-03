@@ -198,6 +198,10 @@ export const GPIOControls = () => {
           const current = outputsState[output.key] || {}
           const isOn = !!current.on
           const pin = current.pin
+          const activeLow = current.active_low === true
+          const gpioLevel = String(current.gpio_level || 'UNKNOWN')
+          const expectedGpioLevel = String(current.expected_gpio_level || 'UNKNOWN')
+          const hasLevelMismatch = gpioLevel !== 'UNKNOWN' && expectedGpioLevel !== 'UNKNOWN' && gpioLevel !== expectedGpioLevel
           const isLoading = loadingOutput === output.key
 
           return (
@@ -206,6 +210,11 @@ export const GPIOControls = () => {
                 <div className="output-title">{output.label}</div>
                 <div className="output-subtitle">
                   {typeof pin === 'number' ? `BOARD Pin ${pin}` : 'Pin not configured'}
+                </div>
+                <div className={`gpio-level-row ${hasLevelMismatch ? 'mismatch' : ''}`}>
+                  <span>Mode: {activeLow ? 'Active-Low' : 'Active-High'}</span>
+                  <span>Expected: {expectedGpioLevel}</span>
+                  <span>Actual: {gpioLevel}</span>
                 </div>
               </div>
 

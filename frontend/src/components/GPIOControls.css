@@ -147,6 +147,27 @@
   color: #6b7280;
 }
 
+.gpio-level-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  color: #475569;
+}
+
+.gpio-level-row span {
+  background: #e2e8f0;
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  font-weight: 600;
+}
+
+.gpio-level-row.mismatch span {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
 .output-actions {
   display: flex;
   align-items: center;
