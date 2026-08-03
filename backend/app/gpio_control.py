@@ -63,7 +63,7 @@ class GPIOController:
 
             pin = self.outputs_config[output_name]["pin"]
             active_low = bool(self.outputs_config[output_name].get("active_low", False))
-            gpio_level = GPIO.LOW if (is_on and active_low) else GPIO.HIGH if (not is_on and active_low) else GPIO.HIGH if is_on else GPIO.LOW
+            gpio_level = self._logical_to_gpio_level(bool(is_on), active_low)
             GPIO.output(pin, gpio_level)
             with self._state_lock:
                 self.output_states[output_name] = bool(is_on)
@@ -79,6 +79,22 @@ class GPIOController:
         except Exception as e:
             logger.error("Failed to set output %s: %s", output_name, e)
             return False
+
+    @staticmethod
+    def _logical_to_gpio_level(is_on: bool, active_low: bool):
+        if active_low:
+            return GPIO.LOW if is_on else GPIO.HIGH
+        return GPIO.HIGH if is_on else GPIO.LOW
+
+    def _read_output_gpio_level_label(self, pin: int) -> str:
+        if not self.gpio_available:
+            return "UNKNOWN"
+
+        try:
+            raw = GPIO.input(pin)
+            return "HIGH" if raw == GPIO.HIGH else "LOW"
+        except Exception:
+            return "UNKNOWN"
 
     def turn_output_on(self, output_name: str) -> bool:
         """Turn a named output on."""
@@ -115,6 +131,16 @@ class GPIOController:
                     "pin": cfg["pin"],
                     "active_low": bool(cfg.get("active_low", False)),
                     "on": self.output_states.get(name, False),
+                    "gpio_level": self._read_output_gpio_level_label(cfg["pin"]),
+                    "expected_gpio_level": (
+                        "LOW"
+                        if self._logical_to_gpio_level(
+                            bool(self.output_states.get(name, False)),
+                            bool(cfg.get("active_low", False)),
+                        )
+                        == GPIO.LOW
+                        else "HIGH"
+                    ) if self.gpio_available else "UNKNOWN",
                 }
                 for name, cfg in self.outputs_config.items()
             },
