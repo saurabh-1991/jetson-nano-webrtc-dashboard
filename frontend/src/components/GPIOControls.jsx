@@ -103,8 +103,19 @@ export const GPIOControls = () => {
   const hasValidVfdSpeedDraft = Number.isFinite(currentVfdSpeed)
   const minVfdSpeed = Number(vfdStatus?.min_speed_hz ?? 0)
   const maxVfdSpeed = Number(vfdStatus?.max_speed_hz ?? 50)
+  const appliedVfdSpeed = Number(vfdStatus?.speed_hz ?? minVfdSpeed)
+  const vfdSpeedScale = Number(vfdStatus?.speed_scale ?? 100)
   const isVfdConfigured = !!(vfdStatus?.enabled && vfdStatus?.library_available && vfdStatus?.host_configured)
   const vfdRunState = !!vfdStatus?.is_running
+  const selectedVfdSpeed = hasValidVfdSpeedDraft ? currentVfdSpeed : minVfdSpeed
+  const selectedRegisterWord = Math.round(selectedVfdSpeed * vfdSpeedScale)
+  const vfdRangeSpan = Math.max(0, maxVfdSpeed - minVfdSpeed)
+  const vfdScaleMarks = vfdRangeSpan > 0
+    ? Array.from({ length: 6 }, (_, index) => {
+      const value = minVfdSpeed + ((vfdRangeSpan / 5) * index)
+      return Number(value.toFixed(1))
+    })
+    : [Number(minVfdSpeed.toFixed(1))]
 
   const handleVfdRunToggle = async () => {
     if (!vfdStatus) {
@@ -237,16 +248,42 @@ export const GPIOControls = () => {
 
         <div className="vfd-speed-grid">
           <label htmlFor="vfd-speed-slider" className="vfd-speed-label">Speed Setpoint (Hz)</label>
+
+          <div className="vfd-speed-live-row">
+            <span className="vfd-live-chip">
+              Selected: {selectedVfdSpeed.toFixed(1)} Hz
+            </span>
+            <span className="vfd-live-chip">
+              Applied: {Number.isFinite(appliedVfdSpeed) ? appliedVfdSpeed.toFixed(1) : '--'} Hz
+            </span>
+            <span className="vfd-live-chip subtle">
+              Cmd Word: {selectedRegisterWord}
+            </span>
+          </div>
+
           <input
             id="vfd-speed-slider"
             type="range"
             min={minVfdSpeed}
             max={maxVfdSpeed}
             step="0.1"
-            value={hasValidVfdSpeedDraft ? currentVfdSpeed : minVfdSpeed}
+            value={selectedVfdSpeed}
+            list="vfd-speed-scale"
             onChange={handleVfdSliderChange}
             disabled={!isVfdConfigured || vfdSpeedBusy}
           />
+
+          <datalist id="vfd-speed-scale">
+            {vfdScaleMarks.map((markValue) => (
+              <option key={markValue} value={markValue} />
+            ))}
+          </datalist>
+
+          <div className="vfd-scale-row" aria-hidden="true">
+            {vfdScaleMarks.map((markValue) => (
+              <span key={`label-${markValue}`} className="vfd-scale-label">{markValue.toFixed(1)}</span>
+            ))}
+          </div>
 
           <div className="vfd-speed-input-row">
             <input
@@ -269,7 +306,7 @@ export const GPIOControls = () => {
           </div>
 
           <div className="output-subtitle">
-            Allowed range: {minVfdSpeed} - {maxVfdSpeed} Hz
+            Allowed range: {minVfdSpeed} - {maxVfdSpeed} Hz (MS300 command resolution via scale: {vfdSpeedScale})
           </div>
         </div>
       </div>

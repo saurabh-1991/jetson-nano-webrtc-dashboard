@@ -49,10 +49,44 @@
   gap: 0.55rem;
 }
 
+.vfd-speed-live-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.vfd-live-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  background: #d1fae5;
+  color: #065f46;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.vfd-live-chip.subtle {
+  background: #ecfeff;
+  color: #0e7490;
+}
+
 .vfd-speed-label {
   font-size: 0.8rem;
   color: #111827;
   font-weight: 700;
+}
+
+.vfd-scale-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.25rem;
+}
+
+.vfd-scale-label {
+  font-size: 0.72rem;
+  color: #475569;
+  text-align: center;
 }
 
 .vfd-speed-input-row {
@@ -168,5 +202,10 @@
   .vfd-speed-input-row {
     width: 100%;
     flex-wrap: wrap;
+  }
+
+  .vfd-scale-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 0.3rem;
   }
 }
