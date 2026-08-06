@@ -4,7 +4,7 @@ set -euo pipefail
 # One-command power-run setup for Jetson Nano.
 # This wrapper runs:
 #   1) setup_powerrun_jetson.sh   (autologin + systemd boot service)
-#   2) configure_static_ip_nmcli.sh (optional static IP on eth/wifi)
+#   2) configure_static_ip_nmcli.sh (optional static/DHCP profile on eth/wifi)
 #
 # Example (root autologin + eth static + wifi static):
 #   sudo ./scripts/powerrun_apply_all.sh \
@@ -43,6 +43,8 @@ WIFI_PASSWORD=""
 WIFI_IP=""
 WIFI_GATEWAY=""
 WIFI_DNS=""
+ETH_DHCP="true"
+WIFI_DHCP="false"
 
 print_help() {
   cat <<'EOF'
@@ -61,19 +63,21 @@ Boot/service options:
   --disable-mdns                  (default: enabled)
   --mdns-hostname <hostname>      (default: jetson-dashboard)
 
-Ethernet static IPv4 options:
+Ethernet options:
   --eth-device <dev>              (default: eth0)
   --eth-ip <CIDR>
   --eth-gateway <ip>
   --eth-dns <dns1,dns2>
+  --eth-dhcp                      (force DHCP/autoconnect profile)
 
-Wi-Fi static IPv4 options:
+Wi-Fi options:
   --wifi-device <dev>             (default: wlan0)
   --wifi-ssid <ssid>
   --wifi-password <pass>
   --wifi-ip <CIDR>
   --wifi-gateway <ip>
   --wifi-dns <dns1,dns2>
+  --wifi-dhcp                     (force DHCP/autoconnect profile)
 
 Examples:
   sudo ./scripts/powerrun_apply_all.sh --autologin-user saurabh \
@@ -143,6 +147,7 @@ while [[ $# -gt 0 ]]; do
     --eth-ip) ETH_IP="$2"; shift 2 ;;
     --eth-gateway) ETH_GATEWAY="$2"; shift 2 ;;
     --eth-dns) ETH_DNS="$2"; shift 2 ;;
+    --eth-dhcp) ETH_DHCP="true"; shift 1 ;;
 
     --wifi-device) WIFI_DEVICE="$2"; shift 2 ;;
     --wifi-ssid) WIFI_SSID="$2"; shift 2 ;;
@@ -150,6 +155,7 @@ while [[ $# -gt 0 ]]; do
     --wifi-ip) WIFI_IP="$2"; shift 2 ;;
     --wifi-gateway) WIFI_GATEWAY="$2"; shift 2 ;;
     --wifi-dns) WIFI_DNS="$2"; shift 2 ;;
+    --wifi-dhcp) WIFI_DHCP="true"; shift 1 ;;
 
     *)
       echo "[ERROR] Unknown argument: $1"
@@ -193,19 +199,30 @@ CONFIG_FILE="$CONFIG_FILE" \
 PROJECT_DIR="$PROJECT_DIR" \
 "$SETUP_SCRIPT"
 
-STATIC_ARGS=()
-if [[ -n "$ETH_IP" ]]; then
-  STATIC_ARGS+=(--eth-device "$ETH_DEVICE" --eth-ip "$ETH_IP" --eth-gateway "$ETH_GATEWAY" --eth-dns "$ETH_DNS")
+STATIC_ARGS=(--eth-device "$ETH_DEVICE")
+if [[ "$ETH_DHCP" == "true" && -z "$ETH_IP" ]]; then
+  STATIC_ARGS+=(--eth-dhcp)
 fi
-if [[ -n "$WIFI_IP" ]]; then
-  STATIC_ARGS+=(--wifi-device "$WIFI_DEVICE" --wifi-ssid "$WIFI_SSID" --wifi-password "$WIFI_PASSWORD" --wifi-ip "$WIFI_IP" --wifi-gateway "$WIFI_GATEWAY" --wifi-dns "$WIFI_DNS")
+if [[ -n "$ETH_IP" ]]; then
+  STATIC_ARGS+=(--eth-ip "$ETH_IP" --eth-gateway "$ETH_GATEWAY" --eth-dns "$ETH_DNS")
+fi
+
+if [[ -n "$WIFI_SSID" && -n "$WIFI_PASSWORD" ]]; then
+  STATIC_ARGS+=(--wifi-device "$WIFI_DEVICE" --wifi-ssid "$WIFI_SSID" --wifi-password "$WIFI_PASSWORD")
+  if [[ -n "$WIFI_IP" ]]; then
+    STATIC_ARGS+=(--wifi-ip "$WIFI_IP" --wifi-gateway "$WIFI_GATEWAY" --wifi-dns "$WIFI_DNS")
+  else
+    STATIC_ARGS+=(--wifi-dhcp)
+  fi
+elif [[ "$WIFI_DHCP" == "true" ]]; then
+  STATIC_ARGS+=(--wifi-dhcp)
 fi
 
 if [[ ${#STATIC_ARGS[@]} -gt 0 ]]; then
-  echo "[STEP 2/2] Configure static IP settings"
+  echo "[STEP 2/2] Configure Ethernet/Wi-Fi network profiles"
   "$IP_SCRIPT" "${STATIC_ARGS[@]}"
 else
-  echo "[STEP 2/2] Static IP skipped (no --eth-ip/--wifi-ip provided)"
+  echo "[STEP 2/2] Network profile step skipped"
 fi
 
 echo ""

@@ -20,6 +20,7 @@ from typing import Any, Dict, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from .config import (
@@ -61,6 +62,10 @@ from .config import (
     EXPERIMENTS_PLAYABLE_CACHE_MAX_GB,
     EXPERIMENTS_PLAYABLE_CACHE_TTL_HOURS,
     EXPERIMENTS_RETENTION_DAYS,
+    EXPERIMENTS_DOWNLOAD_MAX_CONCURRENT,
+    EXPERIMENTS_DOWNLOAD_BLOCK_WHEN_ACTIVE_RUN,
+    EXPERIMENTS_DOWNLOAD_BLOCK_WHEN_LIVE_STREAMING,
+    EXPERIMENTS_DOWNLOAD_ARCHIVE_DIR,
 )
 from .camera import (
     get_camera,
@@ -232,6 +237,7 @@ active_mjpeg_sessions = {}
 active_h264_sessions = {}
 active_mjpeg_lock = asyncio.Lock()
 CAMERA_IDLE_RELEASE_SECONDS = max(3, int(os.getenv("CAMERA_IDLE_RELEASE_SECONDS", "6")))
+download_archive_semaphore = asyncio.Semaphore(max(1, int(EXPERIMENTS_DOWNLOAD_MAX_CONCURRENT)))
 
 h264_failure_state = {}
 
@@ -610,6 +616,27 @@ def _h264_stream_hint(camera_id: str) -> Dict[str, Any]:
             "max_fps": int(profile.get("max_fps", CAMERA_H264_STREAM_MAX_FPS)),
             "use_gstreamer": bool(profile.get("use_gstreamer", CAMERA_H264_STREAM_USE_GSTREAMER)),
         },
+    }
+
+
+def _download_live_stream_activity() -> Dict[str, int]:
+    """Return best-effort active stream counters for download load shedding."""
+    total_mjpeg = 0
+    try:
+        total_mjpeg = int(sum(len(sids) for sids in active_mjpeg_sessions.values()))
+    except Exception:
+        total_mjpeg = 0
+
+    total_h264 = 0
+    try:
+        total_h264 = int(sum(len(sids) for sids in active_h264_sessions.values()))
+    except Exception:
+        total_h264 = 0
+
+    return {
+        "mjpeg": max(0, total_mjpeg),
+        "h264": max(0, total_h264),
+        "webrtc": max(0, int(_current_webrtc_connections())),
     }
 
 
@@ -1651,20 +1678,58 @@ async def experiments_download(run_id: str):
     manager = _get_experiment_manager()
 
     try:
+        if bool(EXPERIMENTS_DOWNLOAD_BLOCK_WHEN_ACTIVE_RUN):
+            active = await run_in_threadpool(manager.get_active_run)
+            if bool((active or {}).get("active")):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Download is blocked while a run is active to reduce power/load spikes.",
+                )
+
+        if bool(EXPERIMENTS_DOWNLOAD_BLOCK_WHEN_LIVE_STREAMING):
+            stream_activity = _download_live_stream_activity()
+            stream_clients = int(stream_activity.get("mjpeg", 0)) + int(stream_activity.get("h264", 0)) + int(stream_activity.get("webrtc", 0))
+            if stream_clients > 0:
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "Download is temporarily blocked while live streaming is active "
+                        "(stop streams first to reduce power/load spikes)."
+                    ),
+                )
+
+        acquired = False
+        try:
+            await asyncio.wait_for(download_archive_semaphore.acquire(), timeout=0.25)
+            acquired = True
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=429,
+                detail="Another archive is already being prepared. Please retry shortly.",
+            )
+
         run_dir = await run_in_threadpool(manager.resolve_run_dir, run_id)
-        temp_root = tempfile.mkdtemp(prefix="exp-download-")
+
+        os.makedirs(EXPERIMENTS_DOWNLOAD_ARCHIVE_DIR, exist_ok=True)
+        temp_root = tempfile.mkdtemp(prefix="exp-download-", dir=EXPERIMENTS_DOWNLOAD_ARCHIVE_DIR)
         archive_base = os.path.join(temp_root, run_id)
-        archive_path = shutil.make_archive(archive_base, "zip", run_dir)
+        archive_path = await run_in_threadpool(shutil.make_archive, archive_base, "zip", run_dir)
 
         return FileResponse(
             archive_path,
             media_type="application/zip",
             filename="{0}.zip".format(run_id),
+            background=BackgroundTask(shutil.rmtree, temp_root, True),
         )
+    except HTTPException:
+        raise
     except RuntimeError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if 'acquired' in locals() and acquired:
+            download_archive_semaphore.release()
 
 
 @app.get("/api/experiments/{run_id}/media")
@@ -2580,6 +2645,7 @@ async def get_stats():
         "camera_idle_release_seconds": CAMERA_IDLE_RELEASE_SECONDS,
             "active_mjpeg_clients": total_mjpeg,
             "active_h264_clients": total_h264,
+        "experiment_video_runtime": _get_experiment_manager().get_video_runtime_metrics(),
         "h264_stream_profile": {
             "enabled": bool(CAMERA_H264_STREAM_ENABLED),
             "input_mode": str(CAMERA_H264_INPUT_MODE or "usb"),

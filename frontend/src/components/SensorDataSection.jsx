@@ -6,9 +6,10 @@ import ToggleSwitch from './ToggleSwitch'
 import './SensorDataSection.css'
 
 const SERIES = [
-  { key: 'hot_zone_temperature', label: 'Hot Zone Temperature', color: '#ef4444' },
-  { key: 'cold_zone_temperature', label: 'Cold Zone Temperature', color: '#3b82f6' },
-  { key: 'exhaust_temp', label: 'Exaust Temp', color: '#f59e0b' },
+  { key: 'hot_zone_temperature', label: 'Hot Zone Temperature', color: '#ef4444', unit: '°C' },
+  { key: 'cold_zone_temperature', label: 'Cold Zone Temperature', color: '#3b82f6', unit: '°C' },
+  { key: 'exhaust_temp', label: 'Exhaust Temp', color: '#f59e0b', unit: '°C' },
+  { key: 'flow_rate', label: 'Flow Rate', color: '#10b981', unit: 'L/min' },
 ]
 
 const HISTORY_INTERVAL_OPTIONS = [
@@ -34,9 +35,11 @@ function getRetryDelayMs(failureCount) {
   return Math.min(SENSOR_POLL_MAX_MS, SENSOR_POLL_BASE_MS * (2 ** step))
 }
 
-function formatValue(value) {
+function formatValue(value, series) {
   if (typeof value !== 'number') return '--'
-  return `${value.toFixed(1)} °C`
+  const unit = (series && series.unit) ? String(series.unit) : ''
+  const decimals = unit === 'L/min' ? 2 : 1
+  return `${value.toFixed(decimals)}${unit ? ` ${unit}` : ''}`
 }
 
 function formatDateTime(value) {
@@ -213,10 +216,12 @@ export const SensorDataSection = () => {
       const ratio = i / steps
       const value = chartMeta.maxY - ratio * range
       const y = ratio * graphHeight
-      ticks.push({ y, label: `${value.toFixed(1)}°C` })
+      const unit = activeSeries?.unit ? String(activeSeries.unit) : ''
+      const decimals = unit === 'L/min' ? 2 : 1
+      ticks.push({ y, label: `${value.toFixed(decimals)}${unit ? ` ${unit}` : ''}` })
     }
     return ticks
-  }, [chartMeta.maxY, chartMeta.minY, graphHeight, numericSamples.length])
+  }, [activeSeries?.unit, chartMeta.maxY, chartMeta.minY, graphHeight, numericSamples.length])
 
   const handleSimulationToggle = async () => {
     const target = !isSimulationEnabled
@@ -261,7 +266,7 @@ export const SensorDataSection = () => {
           {SERIES.map((series) => (
             <div className="reading-item" key={series.key}>
               <span className="reading-label">{series.label}</span>
-              <span className="reading-value">{formatValue(latest?.[series.key])}</span>
+              <span className="reading-value">{formatValue(latest?.[series.key], series)}</span>
             </div>
           ))}
         </div>

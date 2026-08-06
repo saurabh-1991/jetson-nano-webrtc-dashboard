@@ -219,6 +219,11 @@ export const experimentsAPI = {
   start: (payload = {}) => api.post('/experiments/start', payload),
   stop: (payload = {}) => api.post('/experiments/stop', payload),
   getArtifacts: (runId) => api.get(`/experiments/${encodeURIComponent(runId)}/artifacts`),
+  downloadArchive: (runId, requestConfig = {}) =>
+    api.get(`/experiments/${encodeURIComponent(runId)}/download`, {
+      ...requestConfig,
+      responseType: 'blob',
+    }),
   getDownloadUrl: (runId) => `${API_BASE}/api/experiments/${encodeURIComponent(runId)}/download`,
   getMediaUrl: (runId, relativePath) => `${API_BASE}/api/experiments/${encodeURIComponent(runId)}/media?path=${encodeURIComponent(relativePath)}`,
   getPlayableMediaUrl: (runId, relativePath) => `${API_BASE}/api/experiments/${encodeURIComponent(runId)}/media-playable?path=${encodeURIComponent(relativePath)}`,

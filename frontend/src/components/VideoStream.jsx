@@ -187,6 +187,7 @@ export const VideoStream = ({
   const fallbackActiveRef = useRef(false)
   const mjpegRetryTimerRef = useRef(null)
   const mjpegConnectWatchdogTimerRef = useRef(null)
+  const stopSweepTimersRef = useRef([])
   const mjpegRetryCountRef = useRef(0)
   const lastRecoverRequestTsRef = useRef(0)
   const statsPollTimerRef = useRef(null)
@@ -198,6 +199,7 @@ export const VideoStream = ({
   const isConnectingRef = useRef(false)
   const h264TrialFailedRef = useRef(false)
   const h264DecodeProbeRef = useRef(null)
+  const isUnmountingRef = useRef(false)
 
   const buildIceServersConfig = () => {
     const fallback = [
@@ -412,6 +414,14 @@ export const VideoStream = ({
     }
   }
 
+  const clearStopSweepTimers = () => {
+    if (!stopSweepTimersRef.current.length) {
+      return
+    }
+    stopSweepTimersRef.current.forEach((timerId) => clearTimeout(timerId))
+    stopSweepTimersRef.current = []
+  }
+
   const bestEffortPrewarmCamera = async (baseUrl) => {
     try {
       const controller = new AbortController()
@@ -605,6 +615,7 @@ export const VideoStream = ({
     setIsConnecting(true)
     setError(null)
     setNotice(null)
+    clearStopSweepTimers()
     fallbackActiveRef.current = false
     clearMjpegRetryTimer()
     mjpegRetryCountRef.current = 0
@@ -790,6 +801,7 @@ export const VideoStream = ({
 
   const disconnect = () => {
     const baseUrl = getBaseUrl()
+    clearStopSweepTimers()
     clearMjpegRetryTimer()
     clearMjpegConnectWatchdogTimer()
     fallbackActiveRef.current = false
@@ -837,24 +849,27 @@ export const VideoStream = ({
 
     // Follow-up forced cleanup sweeps for network-jitter cases where browser-side
     // stream sockets can remain half-open and keep backend MJPEG sessions alive.
-    ;[1200, 3000].forEach((delayMs) => {
-      setTimeout(() => {
-        if (fallbackActiveRef.current) {
-          return
-        }
+    if (!isUnmountingRef.current) {
+      ;[1200, 3000].forEach((delayMs) => {
+        const timerId = setTimeout(() => {
+          if (fallbackActiveRef.current) {
+            return
+          }
 
-        fetch(`${baseUrl}/api/camera/stop`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...stopPayload,
-            force: true,
+          fetch(`${baseUrl}/api/camera/stop`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...stopPayload,
+              force: true,
+            })
+          }).catch(() => {
+            // best effort
           })
-        }).catch(() => {
-          // best effort
-        })
-      }, delayMs)
-    })
+        }, delayMs)
+        stopSweepTimersRef.current.push(timerId)
+      })
+    }
   }
 
   const openLargeView = () => {
@@ -1126,6 +1141,8 @@ export const VideoStream = ({
     scheduleStatsPoll(3500)
 
     return () => {
+      isUnmountingRef.current = true
+      clearStopSweepTimers()
       clearStatsPollTimer()
       clearMjpegRetryTimer()
       clearMjpegConnectWatchdogTimer()

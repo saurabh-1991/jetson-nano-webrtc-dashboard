@@ -75,9 +75,13 @@ export default function CameraWindow({
       const response = await experimentsAPI.getHistory(25, { timeout: REQUEST_TIMEOUT })
       const runs = Array.isArray(response?.data?.runs) ? response.data.runs : []
       setHistory(runs)
-      if (runs.length > 0 && !selectedRunId) {
-        setSelectedRunId(runs[0].run_id)
-      }
+      setSelectedRunId((prev) => {
+        if (!runs.length) return ''
+        if (prev && runs.some((run) => run.run_id === prev)) {
+          return prev
+        }
+        return runs[0].run_id
+      })
     } catch (_err) {
       setError('Failed to fetch experiment runs for playback.')
     } finally {
@@ -86,10 +90,24 @@ export default function CameraWindow({
   }
 
   useEffect(() => {
-    if (mode === 'playback' && history.length === 0 && !historyLoading) {
-      loadHistory()
+    if (mode !== 'playback') {
+      return
     }
-  }, [mode])
+
+    if (history.length === 0 && !historyLoading) {
+      loadHistory()
+      return
+    }
+
+    if (history.length > 0) {
+      setSelectedRunId((prev) => {
+        if (prev && history.some((run) => run.run_id === prev)) {
+          return prev
+        }
+        return history[0].run_id
+      })
+    }
+  }, [mode, history, historyLoading])
 
   useEffect(() => {
     if (!autoLiveSignal || !enabled) {

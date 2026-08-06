@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import shutil
+import queue
 import threading
 import time
 from datetime import datetime
@@ -15,6 +16,10 @@ from .config import (
     EXPERIMENTS_VIDEO_CACHE_MAX_AGE_SECONDS,
     EXPERIMENTS_MANIFEST_FLUSH_SECONDS,
     EXPERIMENTS_VIDEO_DIRECT_PULL_INTERVAL_SECONDS,
+    EXPERIMENTS_VIDEO_PRODUCER_POLL_SECONDS,
+    EXPERIMENTS_VIDEO_PRODUCER_REBIND_COOLDOWN_SECONDS,
+    EXPERIMENTS_VIDEO_PRODUCER_REBIND_THRESHOLD,
+    EXPERIMENTS_VIDEO_QUEUE_MAX_FRAMES,
     EXPERIMENTS_MAX_HISTORY,
     EXPERIMENTS_ROOT_DIR,
     EXPERIMENTS_SENSOR_INTERVAL_SECONDS,
@@ -53,6 +58,7 @@ class ExperimentManager:
         self._active_run = None
         self._worker_thread = None
         self._worker_stop_event = None
+        self._video_capture_contexts = {}
 
     @staticmethod
     def _ensure_dir(path: str) -> str:
@@ -162,6 +168,192 @@ class ExperimentManager:
             text = "mp4v"
         return cv2.VideoWriter_fourcc(*text)
 
+    def _ensure_video_capture_context(self, camera_id: str):
+        with self._lock:
+            ctx = self._video_capture_contexts.get(camera_id)
+            if ctx is not None:
+                return ctx
+
+            ctx = {
+                "camera_id": camera_id,
+                "queue": queue.Queue(maxsize=max(1, int(EXPERIMENTS_VIDEO_QUEUE_MAX_FRAMES))),
+                "producer_stop_event": threading.Event(),
+                "producer_thread": None,
+                "stats": {
+                    "frames_enqueued": 0,
+                    "frames_dropped": 0,
+                    "cache_hits": 0,
+                    "cache_misses": 0,
+                    "direct_pulls": 0,
+                    "producer_loops": 0,
+                    "producer_rebind_attempts": 0,
+                    "producer_rebind_failures": 0,
+                    "writer_frames": 0,
+                    "writer_segments": 0,
+                    "writer_errors": 0,
+                    "queue_max_depth_seen": 0,
+                    "last_enqueue_ts": None,
+                    "last_frame_latency_ms": None,
+                },
+            }
+            self._video_capture_contexts[camera_id] = ctx
+
+        producer = threading.Thread(
+            target=self._video_capture_worker,
+            args=(camera_id,),
+            name="experiment-video-producer-{0}".format(camera_id),
+            daemon=True,
+        )
+
+        with self._lock:
+            ctx = self._video_capture_contexts.get(camera_id)
+            if ctx is None:
+                return None
+            ctx["producer_thread"] = producer
+
+        producer.start()
+        return ctx
+
+    def _video_capture_worker(self, camera_id: str):
+        stop_event = None
+        frame_queue = None
+        with self._lock:
+            ctx = self._video_capture_contexts.get(camera_id)
+            if ctx is None:
+                return
+            stop_event = ctx.get("producer_stop_event")
+            frame_queue = ctx.get("queue")
+
+        if stop_event is None or frame_queue is None:
+            return
+
+        try:
+            from .camera import get_camera, release_camera
+        except Exception:
+            return
+
+        camera = None
+        last_direct_pull_ts = 0.0
+        consecutive_no_frame = 0
+        last_rebind_attempt_ts = 0.0
+        producer_poll_seconds = max(0.002, float(EXPERIMENTS_VIDEO_PRODUCER_POLL_SECONDS))
+        rebind_threshold = max(4, int(EXPERIMENTS_VIDEO_PRODUCER_REBIND_THRESHOLD))
+        rebind_cooldown = max(0.5, float(EXPERIMENTS_VIDEO_PRODUCER_REBIND_COOLDOWN_SECONDS))
+
+        while not stop_event.is_set():
+            with self._lock:
+                active = self._active_run is not None
+                stats = None
+                context = self._video_capture_contexts.get(camera_id)
+                if context is not None:
+                    stats = context.get("stats")
+
+            if not active:
+                break
+
+            if stats is not None:
+                stats["producer_loops"] = int(stats.get("producer_loops", 0)) + 1
+
+            if camera is None:
+                try:
+                    camera = get_camera(camera_id)
+                except Exception:
+                    camera = None
+                    stop_event.wait(producer_poll_seconds)
+                    continue
+
+            loop_ts = time.time()
+            ok, frame = False, None
+
+            try:
+                if EXPERIMENTS_VIDEO_USE_SHARED_FRAME_CACHE and hasattr(camera, "get_cached_frame"):
+                    ok, frame = camera.get_cached_frame(max_age_seconds=EXPERIMENTS_VIDEO_CACHE_MAX_AGE_SECONDS)
+                    if stats is not None:
+                        if ok and frame is not None:
+                            stats["cache_hits"] = int(stats.get("cache_hits", 0)) + 1
+                        else:
+                            stats["cache_misses"] = int(stats.get("cache_misses", 0)) + 1
+            except Exception:
+                ok, frame = False, None
+
+            if (not ok or frame is None) and (loop_ts - last_direct_pull_ts) >= float(EXPERIMENTS_VIDEO_DIRECT_PULL_INTERVAL_SECONDS):
+                try:
+                    ok, frame = camera.get_frame()
+                    last_direct_pull_ts = loop_ts
+                    if stats is not None:
+                        stats["direct_pulls"] = int(stats.get("direct_pulls", 0)) + 1
+                except Exception:
+                    ok, frame = False, None
+
+            if not ok or frame is None:
+                consecutive_no_frame += 1
+
+                if consecutive_no_frame >= rebind_threshold and (loop_ts - last_rebind_attempt_ts) >= rebind_cooldown:
+                    last_rebind_attempt_ts = loop_ts
+                    if stats is not None:
+                        stats["producer_rebind_attempts"] = int(stats.get("producer_rebind_attempts", 0)) + 1
+                    try:
+                        release_camera(camera_id)
+                        camera = get_camera(camera_id)
+                        logger.warning(
+                            "Video producer rebind attempted for %s after %s consecutive empty frames",
+                            camera_id,
+                            consecutive_no_frame,
+                        )
+                    except Exception as rebind_err:
+                        if stats is not None:
+                            stats["producer_rebind_failures"] = int(stats.get("producer_rebind_failures", 0)) + 1
+                        logger.warning("Video producer rebind failed for %s: %s", camera_id, rebind_err)
+
+                stop_event.wait(producer_poll_seconds)
+                continue
+
+            consecutive_no_frame = 0
+
+            try:
+                frame_queue.put_nowait((loop_ts, frame))
+                q_depth = frame_queue.qsize()
+                if stats is not None:
+                    stats["frames_enqueued"] = int(stats.get("frames_enqueued", 0)) + 1
+                    stats["queue_max_depth_seen"] = max(int(stats.get("queue_max_depth_seen", 0)), int(q_depth))
+                    stats["last_enqueue_ts"] = loop_ts
+            except queue.Full:
+                # Leaky downstream behavior: discard oldest frame to keep writer current.
+                try:
+                    _ = frame_queue.get_nowait()
+                except queue.Empty:
+                    pass
+
+                try:
+                    frame_queue.put_nowait((loop_ts, frame))
+                except queue.Full:
+                    pass
+
+                if stats is not None:
+                    stats["frames_dropped"] = int(stats.get("frames_dropped", 0)) + 1
+
+            stop_event.wait(producer_poll_seconds)
+
+    def _stop_video_capture_contexts(self):
+        with self._lock:
+            contexts = list(self._video_capture_contexts.values())
+
+        for ctx in contexts:
+            try:
+                stop_event = ctx.get("producer_stop_event")
+                if stop_event is not None:
+                    stop_event.set()
+            except Exception:
+                continue
+
+        for ctx in contexts:
+            t = ctx.get("producer_thread")
+            if t is not None and t.is_alive():
+                t.join(timeout=2.5)
+
+        with self._lock:
+            self._video_capture_contexts = {}
+
     def _video_worker(self, run_id: str, camera_id: str):
         stop_event = self._worker_stop_event
         if stop_event is None:
@@ -177,17 +369,12 @@ class ExperimentManager:
         video_path = None
         segment_target_seconds = int(max(0, int(EXPERIMENTS_VIDEO_SEGMENT_SECONDS)))
         started_epoch = time.time()
-        last_direct_pull_ts = 0.0
+        capture_context = self._ensure_video_capture_context(camera_id)
+        frame_queue = capture_context.get("queue") if capture_context else None
+        writer_stats = capture_context.get("stats") if capture_context else None
 
-        try:
-            from .camera import get_camera, release_camera
-            camera = get_camera(camera_id)
-        except Exception as e:
-            logger.warning("Video worker camera init failed for %s: %s", camera_id, e)
-            return
-
-        if camera is None:
-            logger.warning("Video worker camera missing for %s", camera_id)
+        if frame_queue is None:
+            logger.warning("Video worker queue missing for %s", camera_id)
             return
 
         with self._lock:
@@ -311,43 +498,23 @@ class ExperimentManager:
 
         frame_interval = 1.0 / float(max(1, int(EXPERIMENTS_VIDEO_FPS)))
         next_tick = time.time()
-        consecutive_no_frame = 0
-        last_rebind_attempt_ts = 0.0
 
         while not stop_event.is_set():
             try:
-                ok, frame = False, None
-                now_ts = time.time()
-
-                if EXPERIMENTS_VIDEO_USE_SHARED_FRAME_CACHE and hasattr(camera, "get_cached_frame"):
-                    ok, frame = camera.get_cached_frame(max_age_seconds=EXPERIMENTS_VIDEO_CACHE_MAX_AGE_SECONDS)
-
-                # Fallback: pull directly at a throttled cadence only when cache is stale/missing.
-                if (not ok or frame is None) and (now_ts - last_direct_pull_ts) >= float(EXPERIMENTS_VIDEO_DIRECT_PULL_INTERVAL_SECONDS):
-                    ok, frame = camera.get_frame()
-                    last_direct_pull_ts = now_ts
-
-                if not ok or frame is None:
-                    consecutive_no_frame += 1
-
-                    # If camera keeps returning no frames, try a controlled rebind.
-                    if consecutive_no_frame >= 16 and (now_ts - last_rebind_attempt_ts) >= 2.0:
-                        last_rebind_attempt_ts = now_ts
-                        try:
-                            release_camera(camera_id)
-                            camera = get_camera(camera_id)
-                            logger.warning(
-                                "Video worker rebind attempted for %s after %s consecutive empty frames",
-                                camera_id,
-                                consecutive_no_frame,
-                            )
-                        except Exception as rebind_err:
-                            logger.warning("Video worker rebind failed for %s: %s", camera_id, rebind_err)
-
-                    time.sleep(0.02)
+                try:
+                    frame_captured_ts, frame = frame_queue.get(timeout=0.35)
+                except queue.Empty:
                     continue
 
-                consecutive_no_frame = 0
+                if frame is None:
+                    continue
+
+                if writer_stats is not None:
+                    writer_stats["writer_frames"] = int(writer_stats.get("writer_frames", 0)) + 1
+                    writer_stats["last_frame_latency_ms"] = round(
+                        max(0.0, (time.time() - float(frame_captured_ts)) * 1000.0),
+                        2,
+                    )
 
                 if writer is None:
                     _start_segment(frame)
@@ -367,10 +534,14 @@ class ExperimentManager:
                     and segment_started_epoch is not None
                     and (time.time() - segment_started_epoch) >= segment_target_seconds
                 ):
+                    if writer_stats is not None:
+                        writer_stats["writer_segments"] = int(writer_stats.get("writer_segments", 0)) + 1
                     _finalize_segment(state="completed")
 
             except Exception as e:
                 logger.warning("Video worker error for %s: %s", camera_id, e)
+                if writer_stats is not None:
+                    writer_stats["writer_errors"] = int(writer_stats.get("writer_errors", 0)) + 1
                 _finalize_segment(state="error", error=str(e))
                 with self._lock:
                     if self._active_run is not None and camera_id in self._active_run["manifest"].get("video", {}):
@@ -463,6 +634,7 @@ class ExperimentManager:
                     "hot_zone_temperature": sample.get("hot_zone_temperature"),
                     "cold_zone_temperature": sample.get("cold_zone_temperature"),
                     "exhaust_temp": sample.get("exhaust_temp"),
+                    "flow_rate": sample.get("flow_rate"),
                     "source": sample.get("source"),
                     "sensor_timestamp": sample.get("timestamp"),
                 }
@@ -514,6 +686,7 @@ class ExperimentManager:
                     "hot_zone_temperature",
                     "cold_zone_temperature",
                     "exhaust_temp",
+                    "flow_rate",
                     "source",
                     "sensor_timestamp",
                 ],
@@ -551,27 +724,13 @@ class ExperimentManager:
             if EXPERIMENTS_VIDEO_ENABLED:
                 try:
                     from .camera import get_camera_ids
-                    from .camera import get_camera
                     camera_ids = list(get_camera_ids() or [])
                 except Exception:
                     camera_ids = ["cam1", "cam2"]
 
-                # Best-effort prewarm so recording starts even when operators
-                # had just stopped live streams before pressing Start Run.
+                # Start per-camera producer contexts before writer threads.
                 for camera_id in camera_ids:
-                    try:
-                        cam = get_camera(camera_id)
-                        warmed = False
-                        for _ in range(4):
-                            ok, _frame = cam.get_frame()
-                            if ok:
-                                warmed = True
-                                break
-                            time.sleep(0.12)
-                        if not warmed:
-                            logger.warning("Experiment prewarm did not receive initial frame for %s", camera_id)
-                    except Exception as warm_err:
-                        logger.warning("Experiment prewarm failed for %s: %s", camera_id, warm_err)
+                    self._ensure_video_capture_context(camera_id)
 
                 for camera_id in camera_ids:
                     t = threading.Thread(
@@ -603,6 +762,8 @@ class ExperimentManager:
         for t in video_threads:
             if t is not None and t.is_alive():
                 t.join(timeout=3.0)
+
+        self._stop_video_capture_contexts()
 
         with self._lock:
             ended_epoch = time.time()
@@ -656,6 +817,62 @@ class ExperimentManager:
                 self.stop_run(reason=reason)
             except Exception as e:
                 logger.warning("Failed to stop active run during shutdown: %s", e)
+        else:
+            self._stop_video_capture_contexts()
+
+    def get_video_runtime_metrics(self) -> Dict[str, Any]:
+        with self._lock:
+            active_run_id = self._active_run.get("run_id") if self._active_run is not None else None
+            contexts = dict(self._video_capture_contexts)
+
+        per_camera = {}
+        for camera_id, ctx in contexts.items():
+            frame_queue = ctx.get("queue")
+            stats = dict(ctx.get("stats") or {})
+            q_depth = 0
+            q_max = 0
+            try:
+                q_depth = int(frame_queue.qsize()) if frame_queue is not None else 0
+            except Exception:
+                q_depth = 0
+            try:
+                q_max = int(getattr(frame_queue, "maxsize", 0)) if frame_queue is not None else 0
+            except Exception:
+                q_max = 0
+
+            enq = int(stats.get("frames_enqueued", 0))
+            dropped = int(stats.get("frames_dropped", 0))
+            drop_ratio = (float(dropped) / float(enq + dropped)) if (enq + dropped) > 0 else 0.0
+
+            per_camera[camera_id] = {
+                "queue_depth": q_depth,
+                "queue_max": q_max,
+                "drop_ratio": round(drop_ratio, 4),
+                "producer": {
+                    "loops": int(stats.get("producer_loops", 0)),
+                    "frames_enqueued": enq,
+                    "frames_dropped": dropped,
+                    "cache_hits": int(stats.get("cache_hits", 0)),
+                    "cache_misses": int(stats.get("cache_misses", 0)),
+                    "direct_pulls": int(stats.get("direct_pulls", 0)),
+                    "rebind_attempts": int(stats.get("producer_rebind_attempts", 0)),
+                    "rebind_failures": int(stats.get("producer_rebind_failures", 0)),
+                    "queue_max_depth_seen": int(stats.get("queue_max_depth_seen", 0)),
+                    "last_enqueue_ts": stats.get("last_enqueue_ts"),
+                },
+                "writer": {
+                    "frames": int(stats.get("writer_frames", 0)),
+                    "segments": int(stats.get("writer_segments", 0)),
+                    "errors": int(stats.get("writer_errors", 0)),
+                    "last_frame_latency_ms": stats.get("last_frame_latency_ms"),
+                },
+            }
+
+        return {
+            "active_run_id": active_run_id,
+            "camera_count": len(per_camera),
+            "per_camera": per_camera,
+        }
 
     def get_active_run(self) -> Dict[str, Any]:
         with self._lock:

@@ -140,6 +140,14 @@ Key settings:
 - `VFD_RUN_COMMAND_REGISTER`, `VFD_SPEED_COMMAND_REGISTER`
 - `VFD_RUN_FORWARD_WORD`, `VFD_STOP_WORD`
 - `VFD_MIN_WRITE_INTERVAL_MS` — minimum delay between control writes
+- `MODBUS_TRANSPORT` — `serial` (default) or `tcp` for RTU-to-Ethernet gateways
+- `MODBUS_HOST`, `MODBUS_TCP_PORT` — gateway endpoint when `MODBUS_TRANSPORT=tcp`
+- `FLOW_METER_ENABLED` — enable optional separate flow meter polling
+- `FLOW_METER_TRANSPORT` — `tcp` (recommended for RS485->Ethernet gateway) or `serial`
+- `FLOW_METER_HOST`, `FLOW_METER_TCP_PORT` — endpoint when `FLOW_METER_TRANSPORT=tcp`
+- `FLOW_METER_SLAVE_ID`, `FLOW_METER_REGISTER_TYPE`
+- `FLOW_METER_VALUE_ADDRESS`, optional `FLOW_METER_DECIMAL_ADDRESS`, optional `FLOW_METER_STATUS_ADDRESS`
+- `FLOW_METER_SCALE`, `FLOW_METER_OFFSET`, `FLOW_METER_SIGNED`
 - `API_HOST`, `API_PORT`
 - `STUN_SERVERS` — used by WebRTC
 - `MEDIA_WEBRTC_GATEWAY_ENABLED` — toggles optional external gateway profile exposure to frontend (`false` by default)
@@ -151,6 +159,10 @@ Key settings:
 - `EXPERIMENTS_SENSOR_INTERVAL_SECONDS` — sensor CSV sampling interval
 - `EXPERIMENTS_MANIFEST_FLUSH_SECONDS` — periodic manifest flush interval
 - `EXPERIMENTS_MAX_HISTORY` — max history items returned by API
+- `EXPERIMENTS_VIDEO_QUEUE_MAX_FRAMES` — bounded per-camera recording queue depth (default `2`, leaky-drop oldest on pressure)
+- `EXPERIMENTS_VIDEO_PRODUCER_POLL_SECONDS` — producer polling cadence for frame fanout (default `0.008`)
+- `EXPERIMENTS_VIDEO_PRODUCER_REBIND_THRESHOLD` — consecutive no-frame threshold before producer camera rebind attempt (default `16`)
+- `EXPERIMENTS_VIDEO_PRODUCER_REBIND_COOLDOWN_SECONDS` — min interval between producer rebind attempts (default `2.0`)
 
 ### Jetson Nano browser-streaming reference profile (RTSP gateway)
 
@@ -207,6 +219,7 @@ docker run --privileged -p 8000:8000 jetson-nano-backend
 - `GET /api/system/info` — device info and CUDA availability
 - `GET /api/system/status` — full system status payload
 - `GET /api/stats` — backend stats including per-camera counters and active clients
+  - includes `experiment_video_runtime` with per-camera queue depth, drop ratio, producer/writer counters, and end-to-end frame latency
 - `GET /api/sensors/latest` — latest sensor snapshot
 - `GET /api/sensors/history` — recent sensor history window
 - `GET /api/sensors/simulation` / `POST /api/sensors/simulation` — simulation mode control

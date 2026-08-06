@@ -107,6 +107,7 @@ export const ExperimentControl = ({
   const [isStopping, setIsStopping] = useState(false)
   const [isRunningCleanup, setIsRunningCleanup] = useState(false)
   const [deletingRunId, setDeletingRunId] = useState('')
+  const [downloadingRunId, setDownloadingRunId] = useState('')
   const [infoMessage, setInfoMessage] = useState('')
   const [consecutiveFailures, setConsecutiveFailures] = useState(0)
   const [lastSuccessfulRefreshAt, setLastSuccessfulRefreshAt] = useState(null)
@@ -360,10 +361,95 @@ export const ExperimentControl = ({
     }
   }
 
-  const handleDownload = (runId) => {
-    if (!runId) return
-    const url = experimentsAPI.getDownloadUrl(runId)
-    window.open(url, '_blank', 'noopener,noreferrer')
+  const handleDownload = async (runId) => {
+    if (!runId || downloadingRunId) return
+
+    if (active?.active) {
+      setError('Stop the active run before downloading archives (load-shedding safeguard).')
+      setInfoMessage('')
+      return
+    }
+
+    const triggerBrowserNativeDownload = () => {
+      const directUrl = experimentsAPI.getDownloadUrl(runId)
+      const anchor = document.createElement('a')
+      anchor.href = directUrl
+      anchor.target = '_blank'
+      anchor.rel = 'noopener noreferrer'
+      anchor.download = `${runId}.zip`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+    }
+
+    const apiCooldown = getApiCooldownState()
+    if (apiCooldown?.active) {
+      setError(null)
+      setInfoMessage('Network looks unstable; using direct browser download fallback…')
+      triggerBrowserNativeDownload()
+      return
+    }
+
+    try {
+      setDownloadingRunId(runId)
+      setError(null)
+      setInfoMessage('Preparing ZIP download…')
+
+      const response = await experimentsAPI.downloadArchive(runId, {
+        timeout: 60000,
+      })
+
+      const blob = response?.data
+      if (!(blob instanceof Blob) || blob.size <= 0) {
+        throw new Error('Downloaded file is empty')
+      }
+
+      const contentType = String(response?.headers?.['content-type'] || '').toLowerCase()
+      if (contentType.includes('application/json')) {
+        const text = await blob.text()
+        try {
+          const parsed = JSON.parse(text)
+          const detail = parsed?.detail || parsed?.message
+          if (typeof detail === 'string' && detail.trim()) {
+            throw new Error(detail)
+          }
+          throw new Error('Server returned error while preparing ZIP')
+        } catch (jsonParseErr) {
+          if (jsonParseErr instanceof Error && jsonParseErr.message) {
+            throw jsonParseErr
+          }
+          throw new Error('Server returned non-zip response while preparing download')
+        }
+      }
+
+      const objectUrl = window.URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = objectUrl
+      anchor.download = `${runId}.zip`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.URL.revokeObjectURL(objectUrl)
+
+      setInfoMessage(`Download started: ${runId}.zip`)
+    } catch (downloadErr) {
+      const detail = downloadErr?.response?.data?.detail
+      const fallbackMessage = downloadErr?.message || 'Failed to download run ZIP'
+      const message = typeof detail === 'string' ? detail : fallbackMessage
+
+      // In unstable LAN conditions, direct browser download can still succeed
+      // even if XHR blob download times out.
+      setError(null)
+      setInfoMessage(`Download request was unstable (${message}). Trying direct browser download fallback…`)
+      try {
+        triggerBrowserNativeDownload()
+      } catch (_fallbackErr) {
+        setError(message)
+        setInfoMessage('')
+      }
+    } finally {
+      setDownloadingRunId('')
+    }
   }
 
   const handlePlayback = async (runId) => {
@@ -656,8 +742,9 @@ export const ExperimentControl = ({
                                 type="button"
                                 className="download-btn"
                                 onClick={() => handleDownload(item.run_id)}
+                                disabled={downloadingRunId === item.run_id || !!active?.active}
                               >
-                                Download
+                                {downloadingRunId === item.run_id ? 'Downloading…' : 'Download'}
                               </button>
                             </td>
                             <td>
