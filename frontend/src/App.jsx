@@ -99,7 +99,7 @@ function App() {
               enabled={cam1Enabled}
               startLabel="Start Cam 1"
               stopLabel="Stop Cam 1"
-              forceMjpeg={false}
+              forceMjpeg={true}
               autoLiveSignal={autoLiveSignal}
               autoConnectDelayMs={0}
             />
@@ -112,7 +112,7 @@ function App() {
               enabled={cam2Enabled}
               startLabel="Start Cam 2"
               stopLabel="Stop Cam 2"
-              forceMjpeg={false}
+              forceMjpeg={true}
               autoLiveSignal={autoLiveSignal}
               autoConnectDelayMs={120}
             />

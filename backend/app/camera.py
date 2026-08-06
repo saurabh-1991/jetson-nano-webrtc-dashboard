@@ -674,8 +674,22 @@ class CameraCapture:
         modes = self._detect_usb_modes()
         self.detected_usb_modes = modes
 
-        mjpeg_mode = self._pick_best_mode(modes.get("mjpeg", []), 1280, 720, 30)
-        yuy2_mode = self._pick_best_mode(modes.get("yuy2", []), 640, 480, 30)
+        preferred_w = int(self.capture_width)
+        preferred_h = int(self.capture_height)
+        preferred_fps = int(self.capture_fps)
+
+        mjpeg_mode = self._pick_best_mode(
+            modes.get("mjpeg", []),
+            preferred_w,
+            preferred_h,
+            preferred_fps,
+        )
+        yuy2_mode = self._pick_best_mode(
+            modes.get("yuy2", []),
+            preferred_w,
+            preferred_h,
+            preferred_fps,
+        )
 
         if mjpeg_mode:
             mw, mh, mfps = mjpeg_mode
@@ -737,11 +751,25 @@ class CameraCapture:
 
         preferred = []
 
-        mjpeg_mode = self._pick_best_mode(self.detected_usb_modes.get("mjpeg", []), 1280, 720, 30)
+        preferred_w = int(self.capture_width)
+        preferred_h = int(self.capture_height)
+        preferred_fps = int(self.capture_fps)
+
+        mjpeg_mode = self._pick_best_mode(
+            self.detected_usb_modes.get("mjpeg", []),
+            preferred_w,
+            preferred_h,
+            preferred_fps,
+        )
         if mjpeg_mode:
             preferred.append(("MJPG", mjpeg_mode))
 
-        yuy2_mode = self._pick_best_mode(self.detected_usb_modes.get("yuy2", []), 640, 480, 30)
+        yuy2_mode = self._pick_best_mode(
+            self.detected_usb_modes.get("yuy2", []),
+            preferred_w,
+            preferred_h,
+            preferred_fps,
+        )
         if yuy2_mode and CAMERA_ALLOW_YUY2_FALLBACK and not self.force_mjpeg:
             preferred.append(("YUYV", yuy2_mode))
 
@@ -1233,6 +1261,18 @@ class CameraCapture:
                     # Keep candidate list minimal and deterministic to avoid
                     # transient v4l2src/GStreamer lockups on /dev/videoN.
                     fallback_sources = []
+
+                    if self.camera_id == "cam2":
+                        hinted_device = _resolve_camera2_device_from_hint(self.camera_device)
+                        if hinted_device and hinted_device != self.camera_device:
+                            logger.info(
+                                "Cam2 direct-mode remapped device by hint '%s': %s -> %s",
+                                CAMERA2_DEVICE_HINT,
+                                self.camera_device,
+                                hinted_device,
+                            )
+                            self.camera_device = hinted_device
+
                     fallback_sources.append(
                         (
                             self.camera_device,
@@ -1240,6 +1280,34 @@ class CameraCapture:
                             "V4L2 device (direct)",
                         )
                     )
+
+                    # Cam2-specific reliability fallback: if direct V4L2 open fails on
+                    # this OpenCV/runtime combo, try compatibility GStreamer paths on
+                    # the same mapped device before giving up.
+                    if self.camera_id == "cam2" and self.opencv_gstreamer_enabled:
+                        fallback_sources.append(
+                            (
+                                self._build_usb_pipeline_mjpeg_compat(
+                                    int(self.capture_width),
+                                    int(self.capture_height),
+                                    int(self.capture_fps),
+                                ),
+                                cv2.CAP_GSTREAMER,
+                                "Cam2 direct fallback MJPEG compatibility pipeline",
+                            )
+                        )
+                        if CAMERA_ALLOW_YUY2_FALLBACK and not self.force_mjpeg:
+                            fallback_sources.append(
+                                (
+                                    self._build_usb_pipeline_yuy2_compat(
+                                        int(self.capture_width),
+                                        int(self.capture_height),
+                                        int(self.capture_fps),
+                                    ),
+                                    cv2.CAP_GSTREAMER,
+                                    "Cam2 direct fallback YUY2 compatibility pipeline",
+                                )
+                            )
 
                     # In single-camera setups, allow alternate /dev/videoN fallback.
                     if len(CAMERA_PROFILES) <= 1:
@@ -1963,6 +2031,7 @@ class CameraCapture:
 
 # Global camera instances
 cameras = {}
+_cameras_lock = threading.Lock()
 
 
 def get_camera_profile(camera_id: str) -> dict:
@@ -1979,11 +2048,12 @@ def get_camera(camera_id: str = None, create_if_missing: bool = True) -> CameraC
     """Get or create a camera instance by logical camera id."""
     global cameras
     camera_key = (camera_id or CAMERA_DEFAULT_ID or "cam1").lower()
-    if camera_key not in cameras or cameras[camera_key] is None:
-        if not create_if_missing:
-            return None
-        cameras[camera_key] = CameraCapture(camera_id=camera_key, profile=get_camera_profile(camera_key))
-    return cameras[camera_key]
+    with _cameras_lock:
+        if camera_key not in cameras or cameras[camera_key] is None:
+            if not create_if_missing:
+                return None
+            cameras[camera_key] = CameraCapture(camera_id=camera_key, profile=get_camera_profile(camera_key))
+        return cameras[camera_key]
 
 
 def get_existing_camera(camera_id: str = None):
@@ -2000,23 +2070,25 @@ def release_camera(camera_id: str):
     """Release and remove a camera instance from registry."""
     global cameras
     camera_key = (camera_id or CAMERA_DEFAULT_ID or "cam1").lower()
-    cam = cameras.get(camera_key)
-    if cam is not None:
-        cam.release()
-    cameras[camera_key] = None
+    with _cameras_lock:
+        cam = cameras.get(camera_key)
+        if cam is not None:
+            cam.release()
+        cameras[camera_key] = None
 
 
 def release_all_cameras():
     """Release all instantiated cameras."""
     global cameras
-    for camera_id in list(cameras.keys()):
-        try:
-            cam = cameras.get(camera_id)
-            if cam is not None:
-                cam.release()
-        except Exception:
-            pass
-        cameras[camera_id] = None
+    with _cameras_lock:
+        for camera_id in list(cameras.keys()):
+            try:
+                cam = cameras.get(camera_id)
+                if cam is not None:
+                    cam.release()
+            except Exception:
+                pass
+            cameras[camera_id] = None
 
 
 def probe_camera_devices_gstreamer() -> dict:

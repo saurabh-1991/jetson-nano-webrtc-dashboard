@@ -21,8 +21,20 @@ CAM2_WARMUP_ATTEMPTS="${CAM2_WARMUP_ATTEMPTS:-10}"
 H264_INPUT_MODE_EFFECTIVE="${CAMERA_H264_INPUT_MODE:-usb}"
 H264_RTSP_LATENCY_EFFECTIVE="${CAMERA_H264_RTSP_LATENCY_MS:-60}"
 H264_FRAGMENT_MS_EFFECTIVE="${CAMERA_H264_GST_FRAGMENT_MS:-180}"
+RECORDINGS_HOST_DIR_DEFAULT="/mnt/usb_recordings"
+RECORDINGS_HOST_DIR_FALLBACK="/tmp/jetson_dashboard_recordings"
+RECORDINGS_HOST_DIR="${RECORDINGS_HOST_DIR:-$RECORDINGS_HOST_DIR_DEFAULT}"
 
 cd "$PROJECT_DIR"
+
+if [[ "$RECORDINGS_HOST_DIR" == "$RECORDINGS_HOST_DIR_DEFAULT" ]]; then
+  if ! ls -ld "$RECORDINGS_HOST_DIR_DEFAULT" >/dev/null 2>&1; then
+    echo "[nvidia-runtime] WARN: $RECORDINGS_HOST_DIR_DEFAULT unavailable; falling back to $RECORDINGS_HOST_DIR_FALLBACK"
+    RECORDINGS_HOST_DIR="$RECORDINGS_HOST_DIR_FALLBACK"
+  fi
+fi
+
+mkdir -p "$RECORDINGS_HOST_DIR" || true
 
 echo "[nvidia-runtime] Ensuring compose services are up..."
 # If a previously manual NVIDIA backend exists, remove it first so compose can proceed.
@@ -66,7 +78,7 @@ docker run -d \
   --network-alias jetson-backend \
   -p 8000:8000 \
   -v /dev:/dev \
-  -v /mnt/usb_recordings:/mnt/usb_recordings \
+  -v "$RECORDINGS_HOST_DIR:/mnt/usb_recordings" \
   -v "$PROJECT_DIR/backend:/app" \
   -v "$PROJECT_DIR/.git:/workspace/.git:ro" \
   -e PYTHONUNBUFFERED=1 \
@@ -75,9 +87,11 @@ docker run -d \
   -e CAMERA_SOURCE=usb \
   -e CAMERA_ENABLED_IDS=cam1,cam2 \
   -e CAMERA_STRICT_CAMERA_IDS=true \
-  -e CAMERA_ACCELERATION="${CAMERA_ACCELERATION:-direct}" \
-  -e CAMERA1_ACCELERATION="${CAMERA1_ACCELERATION:-direct}" \
-  -e CAMERA2_ACCELERATION="${CAMERA2_ACCELERATION:-direct}" \
+  -e CAMERA1_DEVICE="${CAMERA1_DEVICE:-/dev/video0}" \
+  -e CAMERA2_DEVICE="${CAMERA2_DEVICE:-/dev/video1}" \
+  -e CAMERA_ACCELERATION="${CAMERA_ACCELERATION:-auto}" \
+  -e CAMERA1_ACCELERATION="${CAMERA1_ACCELERATION:-auto}" \
+  -e CAMERA2_ACCELERATION="${CAMERA2_ACCELERATION:-auto}" \
   -e CAMERA_USB_STARTUP_PROBE=false \
   -e CAMERA1_USB_STARTUP_PROBE=false \
   -e CAMERA2_USB_STARTUP_PROBE=false \
