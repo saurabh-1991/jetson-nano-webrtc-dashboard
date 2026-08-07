@@ -36,12 +36,12 @@ class GPIOController:
                     GPIO.setup(output["pin"], GPIO.OUT, initial=initial_level)
 
                 for input_cfg in self.inputs_config.values():
-                    try:
-                        pull_mode = GPIO.PUD_UP if bool(input_cfg.get("active_low", False)) else GPIO.PUD_DOWN
-                        GPIO.setup(input_cfg["pin"], GPIO.IN, pull_up_down=pull_mode)
-                    except TypeError:
-                        # Compatibility fallback for builds without pull_up_down support.
-                        GPIO.setup(input_cfg["pin"], GPIO.IN)
+                    pull_mode = GPIO.PUD_UP if bool(input_cfg.get("active_low", False)) else GPIO.PUD_DOWN
+                    self._setup_input_with_pull(
+                        pin=input_cfg["pin"],
+                        pull_mode=pull_mode,
+                        input_name=input_cfg.get("label", "input"),
+                    )
 
                 logger.info("GPIO initialized successfully")
             except Exception as e:
@@ -106,6 +106,28 @@ class GPIOController:
             return "HIGH" if raw == GPIO.HIGH else "LOW"
         except Exception:
             return "UNKNOWN"
+
+    def _setup_input_with_pull(self, pin: int, pull_mode, input_name: str) -> None:
+        """Configure input pin with pull resistor and fail loudly if unsupported.
+
+        For production safety, we avoid a silent fallback to floating inputs because
+        that can read false LOW and incorrectly indicate flame ON.
+        """
+        try:
+            GPIO.setup(pin, GPIO.IN, pull_up_down=pull_mode)
+            return
+        except TypeError:
+            # Some GPIO implementations accept pull mode as positional argument.
+            try:
+                GPIO.setup(pin, GPIO.IN, pull_mode)
+                return
+            except Exception as e:
+                mode_name = "PUD_UP" if pull_mode == GPIO.PUD_UP else "PUD_DOWN"
+                raise RuntimeError(
+                    f"Failed to set pull resistor ({mode_name}) for {input_name} on BOARD pin {pin}. "
+                    "Input may float and report incorrect state. "
+                    "Use an external pull resistor (4.7k-10k) to 3.3V for active-low inputs."
+                ) from e
 
     def turn_output_on(self, output_name: str) -> bool:
         """Turn a named output on."""
