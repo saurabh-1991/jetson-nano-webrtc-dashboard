@@ -1,6 +1,7 @@
 """Camera capture using GStreamer and OpenCV CUDA"""
 
 import logging
+import os
 import re
 import shlex
 import subprocess
