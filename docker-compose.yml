@@ -44,7 +44,7 @@ services:
       - VFD_STOP_WORD=0
       - VFD_MIN_WRITE_INTERVAL_MS=150
       - MODBUS_ENABLED=true
-      - MODBUS_TRANSPORT=serial
+      - MODBUS_TRANSPORT=tcp
       - MODBUS_PORT=/dev/ttyUSB0
       - MODBUS_HOST=
       - MODBUS_TCP_PORT=502
@@ -57,7 +57,7 @@ services:
       - MODBUS_REGISTER_TYPE=holding
       - MODBUS_ADDRESS_BASE=0
       - MODBUS_ADDRESS_OFFSET=0
-      - FLOW_METER_ENABLED=false
+      - FLOW_METER_ENABLED=true
       - FLOW_METER_TRANSPORT=tcp
       - FLOW_METER_HOST=
       - FLOW_METER_TCP_PORT=502
