@@ -235,6 +235,7 @@ experiment_cleanup_task = None
 experiment_manager = None
 active_mjpeg_sessions = {}
 active_h264_sessions = {}
+active_h264_processes = {}
 active_mjpeg_lock = asyncio.Lock()
 CAMERA_IDLE_RELEASE_SECONDS = max(3, int(os.getenv("CAMERA_IDLE_RELEASE_SECONDS", "6")))
 download_archive_semaphore = asyncio.Semaphore(max(1, int(EXPERIMENTS_DOWNLOAD_MAX_CONCURRENT)))
@@ -536,6 +537,27 @@ def _ensure_camera_session_bucket(camera_id: str):
 def _ensure_h264_session_bucket(camera_id: str):
     if camera_id not in active_h264_sessions:
         active_h264_sessions[camera_id] = set()
+
+
+def _ensure_h264_process_bucket(camera_id: str):
+    if camera_id not in active_h264_processes:
+        active_h264_processes[camera_id] = {}
+
+
+def _terminate_h264_process(proc: subprocess.Popen):
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=1.5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 def _get_h264_stream_profile(camera_id: str) -> Dict[str, Any]:
@@ -1828,26 +1850,51 @@ async def stop_camera(request: dict = None):
     stream_session_id = request.get("stream_session_id")
     force = bool(request.get("force", False))
     cleared_sessions = 0
+    cleared_h264_sessions = 0
+    stopped_h264_processes = 0
 
-    # Explicitly unregister the caller's MJPEG session for immediate stats update.
+    # Explicitly unregister the caller's sessions for immediate stats update.
     if stream_session_id:
+        proc_to_stop = None
         async with active_mjpeg_lock:
             _ensure_camera_session_bucket(camera_id)
+            _ensure_h264_session_bucket(camera_id)
+            _ensure_h264_process_bucket(camera_id)
             if stream_session_id in active_mjpeg_sessions[camera_id]:
                 active_mjpeg_sessions[camera_id].discard(stream_session_id)
+            if stream_session_id in active_h264_sessions[camera_id]:
+                active_h264_sessions[camera_id].discard(stream_session_id)
+            proc_to_stop = active_h264_processes[camera_id].pop(stream_session_id, None)
+
+        if proc_to_stop is not None:
+            stopped_h264_processes += 1
+            await run_in_threadpool(_terminate_h264_process, proc_to_stop)
 
     if force:
+        procs_to_stop = []
         async with active_mjpeg_lock:
             _ensure_camera_session_bucket(camera_id)
+            _ensure_h264_session_bucket(camera_id)
+            _ensure_h264_process_bucket(camera_id)
             cleared_sessions = len(active_mjpeg_sessions[camera_id])
             active_mjpeg_sessions[camera_id].clear()
+            cleared_h264_sessions = len(active_h264_sessions[camera_id])
+            active_h264_sessions[camera_id].clear()
+            procs_to_stop = list(active_h264_processes[camera_id].values())
+            active_h264_processes[camera_id].clear()
+
+        for proc in procs_to_stop:
+            stopped_h264_processes += 1
+            await run_in_threadpool(_terminate_h264_process, proc)
 
     # Give stream generators a short moment to observe disconnection and decrement counters.
     await asyncio.sleep(0.35)
 
     async with active_mjpeg_lock:
         _ensure_camera_session_bucket(camera_id)
+        _ensure_h264_session_bucket(camera_id)
         current_mjpeg_clients = len(active_mjpeg_sessions[camera_id])
+        current_h264_clients = len(active_h264_sessions[camera_id])
 
     current_webrtc_connections = 0
     if is_webrtc_available():
@@ -1863,13 +1910,14 @@ async def stop_camera(request: dict = None):
         released = True
         camera = get_camera(camera_id, create_if_missing=False)
     elif camera is not None:
-        released = camera.maybe_release_if_idle(
-            idle_seconds=0,
-            active_mjpeg_clients=current_mjpeg_clients,
-            webrtc_connections=current_webrtc_connections,
-        )
-        if released:
-            release_camera(camera_id)
+        if current_h264_clients <= 0:
+            released = camera.maybe_release_if_idle(
+                idle_seconds=0,
+                active_mjpeg_clients=current_mjpeg_clients,
+                webrtc_connections=current_webrtc_connections,
+            )
+            if released:
+                release_camera(camera_id)
 
     return {
         "camera_id": camera_id,
@@ -1877,7 +1925,10 @@ async def stop_camera(request: dict = None):
         "stream_session_id": stream_session_id,
         "force": force,
         "cleared_sessions": int(cleared_sessions),
+        "cleared_h264_sessions": int(cleared_h264_sessions),
+        "stopped_h264_processes": int(stopped_h264_processes),
         "active_mjpeg_clients": current_mjpeg_clients,
+        "active_h264_clients": current_h264_clients,
         "webrtc_connections": current_webrtc_connections,
         "camera_open": bool(camera and camera.is_open),
         "timestamp": datetime.now().isoformat(),
@@ -2306,6 +2357,10 @@ async def stream_h264(request: Request):
                 bufsize=0,
             )
 
+            async with active_mjpeg_lock:
+                _ensure_h264_process_bucket(camera_id)
+                active_h264_processes[camera_id][stream_session_id] = proc
+
             while True:
                 if await request.is_disconnected():
                     break
@@ -2327,21 +2382,13 @@ async def stream_h264(request: Request):
             logger.warning("H264 stream error (camera=%s): %s", camera_id, e)
         finally:
             if proc is not None:
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
-                try:
-                    proc.wait(timeout=1.5)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+                _terminate_h264_process(proc)
 
             async with active_mjpeg_lock:
                 _ensure_h264_session_bucket(camera_id)
+                _ensure_h264_process_bucket(camera_id)
                 active_h264_sessions[camera_id].discard(stream_session_id)
+                active_h264_processes[camera_id].pop(stream_session_id, None)
                 logger.info(
                     "H264 client disconnected sid=%s camera=%s. Active H264 clients: %s",
                     stream_session_id,

@@ -464,8 +464,22 @@ export const VideoStream = ({
     })
   }
 
+  const bestEffortStopCameraSession = (baseUrl) => {
+    fetch(`${baseUrl}/api/camera/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        camera_id: cameraId,
+        stream_session_id: streamSessionIdRef.current,
+      })
+    }).catch(() => {
+      // best effort
+    })
+  }
+
   const startMJPEGFallback = (baseUrl, reason) => {
     fallbackActiveRef.current = true
+    bestEffortStopCameraSession(baseUrl)
     closePeerConnection()
     clearMjpegRetryTimer()
     clearMjpegConnectWatchdogTimer()
@@ -667,6 +681,8 @@ export const VideoStream = ({
           maxMs: Number(h264Hint?.failure_cooldown_max_ms || 300000),
           backendRetryMs: Number(h264Hint?.cooldown_remaining_ms || 0),
         })
+        bestEffortStopCameraSession(baseUrl)
+        bestEffortRecoverCamera(baseUrl, 'h264_probe_failed_to_mjpeg')
         h264TrialFailedRef.current = true
         setNotice('H.264 trial unavailable; trying WebRTC next, then MJPEG fallback if needed.')
       } else if (enableH264Trial && h264EnabledForCamera && effectiveH264CooldownMs > 0) {
