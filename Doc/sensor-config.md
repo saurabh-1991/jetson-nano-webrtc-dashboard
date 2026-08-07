@@ -141,6 +141,86 @@ If your backend uses NVIDIA runtime script in production, run:
 ./scripts/run_backend_with_nvidia_runtime.sh
 ```
 
+## 6.1 Field update flow when containers are already running
+
+Use this when backend/frontend containers are already running and you changed IP/register env values.
+
+### Option A: Backend-only refresh (recommended for sensor config changes)
+
+1) Stop backend container:
+
+```bash
+docker-compose stop jetson-backend
+```
+
+2) Remove existing backend container:
+
+```bash
+docker-compose rm -f jetson-backend
+```
+
+3) Rebuild backend image:
+
+```bash
+docker-compose build --no-cache jetson-backend
+```
+
+4) (Optional) prune dangling images/layers:
+
+```bash
+docker image prune -f
+docker builder prune -f
+```
+
+5) Start backend again:
+
+```bash
+docker-compose up -d jetson-backend
+```
+
+6) If your site uses NVIDIA runtime mode, run this instead of step 5:
+
+```bash
+./scripts/run_backend_with_nvidia_runtime.sh
+```
+
+### Option B: Full stack refresh (backend + frontend)
+
+1) Stop all project containers:
+
+```bash
+docker-compose down --remove-orphans
+```
+
+2) (Optional) remove old images for this project only:
+
+```bash
+docker rmi jetsonnanowebrtcdashboard_jetson-backend:latest || true
+docker rmi jetsonnanowebrtcdashboard_jetson-frontend:latest || true
+```
+
+3) Rebuild and start full stack:
+
+```bash
+docker-compose up -d --build
+```
+
+4) If backend should run in NVIDIA runtime mode, run after stack starts:
+
+```bash
+./scripts/run_backend_with_nvidia_runtime.sh
+```
+
+### Optional deep cleanup (use carefully)
+
+This removes unused containers, networks, images, and build cache system-wide:
+
+```bash
+docker system prune -af
+```
+
+Run this only when you understand impact on other projects.
+
 ## 7. Validation checklist
 
 1. Backend health:
