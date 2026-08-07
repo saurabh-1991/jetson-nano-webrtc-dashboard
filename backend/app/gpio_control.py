@@ -37,7 +37,8 @@ class GPIOController:
 
                 for input_cfg in self.inputs_config.values():
                     try:
-                        GPIO.setup(input_cfg["pin"], GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+                        pull_mode = GPIO.PUD_UP if bool(input_cfg.get("active_low", False)) else GPIO.PUD_DOWN
+                        GPIO.setup(input_cfg["pin"], GPIO.IN, pull_up_down=pull_mode)
                     except TypeError:
                         # Compatibility fallback for builds without pull_up_down support.
                         GPIO.setup(input_cfg["pin"], GPIO.IN)
