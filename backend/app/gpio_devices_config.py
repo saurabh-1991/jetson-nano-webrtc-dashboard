@@ -43,7 +43,7 @@ GPIO_INPUTS_DEFAULT = {
         "label": "Flame",
         "pin": 22,
         "env": "GPIO_FLAME_INPUT_PIN",
-        "active_low": False,
+        "active_low": True,
         "active_low_env": "GPIO_FLAME_ACTIVE_LOW",
     },
     "burner_trip": {
