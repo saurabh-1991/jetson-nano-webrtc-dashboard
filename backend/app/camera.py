@@ -2155,6 +2155,57 @@ def release_all_cameras():
             cameras[camera_id] = None
 
 
+# Coordinated rebind guard: multiple independent consumers (MJPEG stream self-heal,
+# experiment video producer self-heal, etc.) can all detect a starved camera at the
+# same time. Without coordination they each call release_camera()+get_camera() on the
+# same shared singleton concurrently, which tears down the device out from under one
+# another and causes a runaway open/close thrash loop. Serialize rebinds per camera
+# and enforce a minimum interval so only one consumer actually performs the rebind.
+_rebind_locks = {}
+_rebind_locks_guard = threading.Lock()
+_last_rebind_ts = {}
+CAMERA_REBIND_MIN_INTERVAL_SECONDS = float(os.getenv("CAMERA_REBIND_MIN_INTERVAL_SECONDS", "3.0"))
+
+
+def _get_rebind_lock(camera_key: str) -> threading.Lock:
+    with _rebind_locks_guard:
+        lock = _rebind_locks.get(camera_key)
+        if lock is None:
+            lock = threading.Lock()
+            _rebind_locks[camera_key] = lock
+        return lock
+
+
+def try_rebind_camera(camera_id: str, reason: str = "rebind") -> "CameraCapture":
+    """Coordinate a camera release+reopen across multiple consumers.
+
+    Only one caller performs the actual release/reopen within the cooldown window;
+    concurrent or rapid repeat callers simply receive the current camera instance
+    instead of tearing it down again, preventing thundering-herd rebind storms.
+    """
+    camera_key = (camera_id or CAMERA_DEFAULT_ID or "cam1").lower()
+    lock = _get_rebind_lock(camera_key)
+
+    if not lock.acquire(blocking=False):
+        # Another consumer is already rebinding this camera; don't pile on.
+        return get_camera(camera_key)
+
+    try:
+        now_ts = time.time()
+        last_ts = _last_rebind_ts.get(camera_key, 0.0)
+        if (now_ts - last_ts) < CAMERA_REBIND_MIN_INTERVAL_SECONDS:
+            # A rebind happened very recently (possibly by another consumer); skip.
+            return get_camera(camera_key)
+
+        logger.warning("Coordinated camera rebind camera=%s reason=%s", camera_key, reason)
+        release_camera(camera_key)
+        camera = get_camera(camera_key)
+        _last_rebind_ts[camera_key] = now_ts
+        return camera
+    finally:
+        lock.release()
+
+
 def probe_camera_devices_gstreamer() -> dict:
     """Probe /dev/video* nodes and include GStreamer-visible capabilities."""
     devices = sorted(glob.glob("/dev/video*"))

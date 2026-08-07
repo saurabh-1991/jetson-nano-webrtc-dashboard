@@ -74,6 +74,7 @@ from .camera import (
     release_camera,
     release_all_cameras,
     probe_camera_devices_gstreamer,
+    try_rebind_camera,
 )
 from .gpio_control import get_gpio_controller
 from . import gpio_control as gpio_module
@@ -2170,8 +2171,7 @@ async def stream_mjpeg(request: Request):
                             consecutive_failures,
                         )
                         last_rebind_ts = now_ts
-                        release_camera(camera_id)
-                        camera = get_camera(camera_id)
+                        camera = try_rebind_camera(camera_id, reason="mjpeg_stream_starved")
 
                     # Keep connection alive while recovering to reduce black-screen churn.
                     if (now_ts - last_success_ts) > 1.0:

@@ -228,7 +228,7 @@ class ExperimentManager:
             return
 
         try:
-            from .camera import get_camera, release_camera
+            from .camera import get_camera, try_rebind_camera
         except Exception:
             return
 
@@ -293,8 +293,7 @@ class ExperimentManager:
                     if stats is not None:
                         stats["producer_rebind_attempts"] = int(stats.get("producer_rebind_attempts", 0)) + 1
                     try:
-                        release_camera(camera_id)
-                        camera = get_camera(camera_id)
+                        camera = try_rebind_camera(camera_id, reason="experiment_video_producer_starved")
                         logger.warning(
                             "Video producer rebind attempted for %s after %s consecutive empty frames",
                             camera_id,
