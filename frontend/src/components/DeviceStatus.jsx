@@ -346,12 +346,15 @@ export const DeviceStatus = () => {
               {Object.entries(status.gpio.inputs).map(([key, input]) => {
                 const signalOn = !!input?.signal
                 const pin = input?.pin
+                const rawLevel = input?.raw_gpio_level
                 return (
                   <div className="status-item" key={key}>
                     <div className="input-meta">
                       <div className="input-title">{input?.label || key}</div>
                       <div className="input-subtitle">
-                        {typeof pin === 'number' ? `BOARD Pin ${pin}` : 'Pin not configured'}
+                        {typeof pin === 'number'
+                          ? `BOARD Pin ${pin}${rawLevel ? ` · Raw ${rawLevel}` : ''}`
+                          : 'Pin not configured'}
                       </div>
                     </div>
                     <span className="indicator-wrap">

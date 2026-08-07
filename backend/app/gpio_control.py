@@ -97,6 +97,16 @@ class GPIOController:
         except Exception:
             return "UNKNOWN"
 
+    def _read_input_gpio_level_label(self, pin: int) -> str:
+        if not self.gpio_available:
+            return "UNKNOWN"
+
+        try:
+            raw = GPIO.input(pin)
+            return "HIGH" if raw == GPIO.HIGH else "LOW"
+        except Exception:
+            return "UNKNOWN"
+
     def turn_output_on(self, output_name: str) -> bool:
         """Turn a named output on."""
         return self.set_output(output_name, True)
@@ -117,11 +127,14 @@ class GPIOController:
 
         for name, cfg in self.inputs_config.items():
             signal_on = self.read_input_signal(name)
+            raw_level = self._read_input_gpio_level_label(cfg["pin"])
             input_signals[name] = {
                 "label": cfg["label"],
                 "pin": cfg["pin"],
                 "active_low": bool(cfg.get("active_low", False)),
                 "signal": signal_on,
+                "raw_gpio_level": raw_level,
+                "raw_high": True if raw_level == "HIGH" else False if raw_level == "LOW" else None,
             }
 
         return {
