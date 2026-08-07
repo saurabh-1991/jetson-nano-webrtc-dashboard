@@ -75,6 +75,8 @@ services:
       - FLOW_METER_MIN_VALUE=0.0
       - FLOW_METER_MAX_VALUE=99999.0
       - FLOW_METER_FAILURE_BACKOFF_SECONDS=5.0
+      - GPIO_FLAME_INPUT_PIN=22
+      - GPIO_FLAME_ACTIVE_LOW=true
     volumes:
       - /dev:/dev
       - /mnt/usb_recordings:/mnt/usb_recordings
