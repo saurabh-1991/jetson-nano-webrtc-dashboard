@@ -2011,6 +2011,21 @@ async def prewarm_cameras(request: dict = None):
 async def get_frame(camera_id: str = CAMERA_DEFAULT_ID):
     """Get single frame as JPEG"""
     camera_id = _resolve_camera_id(camera_id)
+
+    async with active_mjpeg_lock:
+        _ensure_h264_session_bucket(camera_id)
+        active_h264_clients = len(active_h264_sessions[camera_id])
+        if active_h264_clients > 0:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "camera_busy_with_h264",
+                    "camera_id": camera_id,
+                    "active_h264_clients": active_h264_clients,
+                    "message": "Camera is currently serving H.264 stream. Stop H.264 session before JPEG frame capture.",
+                },
+            )
+
     camera = _get_or_recover_camera(camera_id)
     if not camera.is_open:
         raise HTTPException(
@@ -2038,6 +2053,7 @@ async def get_frame(camera_id: str = CAMERA_DEFAULT_ID):
 async def stream_mjpeg(request: Request):
     """Stream video as MJPEG (fallback for low-latency needs)"""
     camera_id = _resolve_camera_id(request.query_params.get("camera_id") or CAMERA_DEFAULT_ID)
+    stream_session_id = request.query_params.get("sid") or str(uuid.uuid4())
     startup_camera = _get_or_recover_camera(camera_id)
     if not startup_camera.is_open:
         raise HTTPException(
@@ -2045,8 +2061,30 @@ async def stream_mjpeg(request: Request):
             detail="Camera is unavailable. Verify camera device mapping and retry stream."
         )
 
+    async with active_mjpeg_lock:
+        _ensure_camera_session_bucket(camera_id)
+        _ensure_h264_session_bucket(camera_id)
+        active_h264_clients = len(active_h264_sessions[camera_id])
+        if active_h264_clients > 0:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "camera_busy_with_h264",
+                    "camera_id": camera_id,
+                    "active_h264_clients": active_h264_clients,
+                    "message": "Camera is currently serving H.264 stream. Stop H.264 session before MJPEG.",
+                },
+            )
+
+        active_mjpeg_sessions[camera_id].add(stream_session_id)
+        logger.info(
+            "MJPEG client connected sid=%s camera=%s. Active clients: %s",
+            stream_session_id,
+            camera_id,
+            len(active_mjpeg_sessions[camera_id]),
+        )
+
     async def generate():
-        stream_session_id = request.query_params.get("sid") or str(uuid.uuid4())
         camera = get_camera(camera_id)
         profile = CAMERA_PROFILES.get(camera_id, {})
         jpeg_quality = int(profile.get("jpeg_quality") or getattr(camera, "jpeg_quality", 80) or 80)
@@ -2056,16 +2094,6 @@ async def stream_mjpeg(request: Request):
         last_rebind_ts = 0.0
         rebind_cooldown_seconds = 1.5
         rebind_failure_threshold = 8
-
-        async with active_mjpeg_lock:
-            _ensure_camera_session_bucket(camera_id)
-            active_mjpeg_sessions[camera_id].add(stream_session_id)
-            logger.info(
-                "MJPEG client connected sid=%s camera=%s. Active clients: %s",
-                stream_session_id,
-                camera_id,
-                len(active_mjpeg_sessions[camera_id]),
-            )
         
         try:
             while True:
@@ -2181,6 +2209,7 @@ async def stream_h264(request: Request):
             )
 
     camera_id = _resolve_camera_id(request.query_params.get("camera_id") or CAMERA_DEFAULT_ID)
+    stream_session_id = request.query_params.get("sid") or str(uuid.uuid4())
     h264_profile = _get_h264_stream_profile(camera_id)
 
     if not bool(h264_profile.get("enabled", CAMERA_H264_STREAM_ENABLED)):
@@ -2205,8 +2234,52 @@ async def stream_h264(request: Request):
             },
         )
 
+    async with active_mjpeg_lock:
+        _ensure_camera_session_bucket(camera_id)
+        _ensure_h264_session_bucket(camera_id)
+        active_mjpeg_clients = len(active_mjpeg_sessions[camera_id])
+        active_h264_clients = len(active_h264_sessions[camera_id])
+
+        if active_mjpeg_clients > 0:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "camera_busy_with_mjpeg",
+                    "camera_id": camera_id,
+                    "active_mjpeg_clients": active_mjpeg_clients,
+                    "message": "Camera is currently serving MJPEG stream. Stop MJPEG session before H.264.",
+                },
+            )
+
+        if active_h264_clients > 0:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "camera_h264_session_exists",
+                    "camera_id": camera_id,
+                    "active_h264_clients": active_h264_clients,
+                    "message": "Only one H.264 session per camera is allowed for stability.",
+                },
+            )
+
+        active_h264_sessions[camera_id].add(stream_session_id)
+        logger.info(
+            "H264 client connected sid=%s camera=%s mode=%s. Active H264 clients: %s",
+            stream_session_id,
+            camera_id,
+            input_mode,
+            len(active_h264_sessions[camera_id]),
+        )
+
+    camera_for_h264 = get_camera(camera_id, create_if_missing=False)
+    if camera_for_h264 is not None and camera_for_h264.is_open:
+        try:
+            camera_for_h264.release()
+        except Exception:
+            pass
+        release_camera(camera_id)
+
     async def generate_h264():
-        stream_session_id = request.query_params.get("sid") or str(uuid.uuid4())
         if _can_use_h264_gst_pipeline(h264_profile):
             cmd, encoder = _build_h264_stream_gst_command(camera_id, h264_profile)
             stream_backend = "gstreamer"
@@ -2217,18 +2290,13 @@ async def stream_h264(request: Request):
         bytes_streamed = 0
         started_at = time.time()
 
-        async with active_mjpeg_lock:
-            _ensure_h264_session_bucket(camera_id)
-            active_h264_sessions[camera_id].add(stream_session_id)
-            logger.info(
-                "H264 client connected sid=%s camera=%s mode=%s backend=%s encoder=%s. Active H264 clients: %s",
-                stream_session_id,
-                camera_id,
-                input_mode,
-                stream_backend,
-                encoder,
-                len(active_h264_sessions[camera_id]),
-            )
+        logger.info(
+            "H264 stream start sid=%s camera=%s backend=%s encoder=%s",
+            stream_session_id,
+            camera_id,
+            stream_backend,
+            encoder,
+        )
 
         try:
             proc = subprocess.Popen(
