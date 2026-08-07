@@ -320,6 +320,12 @@
   background: #ffe4e6;
 }
 
+.playback-download-link {
+  display: inline-block;
+  margin-top: 0.5rem;
+  text-decoration: none;
+}
+
 .playback-label {
   margin-bottom: 0.55rem;
   color: #334155;

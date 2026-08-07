@@ -361,7 +361,7 @@ export const ExperimentControl = ({
     }
   }
 
-  const handleDownload = async (runId) => {
+  const handleDownload = (runId) => {
     if (!runId || downloadingRunId) return
 
     if (active?.active) {
@@ -370,86 +370,30 @@ export const ExperimentControl = ({
       return
     }
 
-    const triggerBrowserNativeDownload = () => {
-      const directUrl = experimentsAPI.getDownloadUrl(runId)
-      const anchor = document.createElement('a')
-      anchor.href = directUrl
-      anchor.target = '_blank'
-      anchor.rel = 'noopener noreferrer'
-      anchor.download = `${runId}.zip`
-      document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
-    }
+    // Always stream the download directly through the browser's native download
+    // manager instead of buffering the ZIP into a JS Blob first. Experiment
+    // archives can reach multiple GB (hours of dual-camera video); buffering that
+    // in page memory risked crashing the tab and was bound by an arbitrary XHR
+    // timeout. A plain anchor click has neither limitation - the browser writes
+    // straight to disk and has no timeout of its own.
+    setError(null)
+    setInfoMessage(`Download started: ${runId}.zip. Large runs can take a while for the server to prepare before your browser shows download progress.`)
+    setDownloadingRunId(runId)
 
-    const apiCooldown = getApiCooldownState()
-    if (apiCooldown?.active) {
-      setError(null)
-      setInfoMessage('Network looks unstable; using direct browser download fallback…')
-      triggerBrowserNativeDownload()
-      return
-    }
+    const directUrl = experimentsAPI.getDownloadUrl(runId)
+    const anchor = document.createElement('a')
+    anchor.href = directUrl
+    anchor.rel = 'noopener noreferrer'
+    anchor.download = `${runId}.zip`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
 
-    try {
-      setDownloadingRunId(runId)
-      setError(null)
-      setInfoMessage('Preparing ZIP download…')
-
-      const response = await experimentsAPI.downloadArchive(runId, {
-        timeout: 60000,
-      })
-
-      const blob = response?.data
-      if (!(blob instanceof Blob) || blob.size <= 0) {
-        throw new Error('Downloaded file is empty')
-      }
-
-      const contentType = String(response?.headers?.['content-type'] || '').toLowerCase()
-      if (contentType.includes('application/json')) {
-        const text = await blob.text()
-        try {
-          const parsed = JSON.parse(text)
-          const detail = parsed?.detail || parsed?.message
-          if (typeof detail === 'string' && detail.trim()) {
-            throw new Error(detail)
-          }
-          throw new Error('Server returned error while preparing ZIP')
-        } catch (jsonParseErr) {
-          if (jsonParseErr instanceof Error && jsonParseErr.message) {
-            throw jsonParseErr
-          }
-          throw new Error('Server returned non-zip response while preparing download')
-        }
-      }
-
-      const objectUrl = window.URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = objectUrl
-      anchor.download = `${runId}.zip`
-      document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
-      window.URL.revokeObjectURL(objectUrl)
-
-      setInfoMessage(`Download started: ${runId}.zip`)
-    } catch (downloadErr) {
-      const detail = downloadErr?.response?.data?.detail
-      const fallbackMessage = downloadErr?.message || 'Failed to download run ZIP'
-      const message = typeof detail === 'string' ? detail : fallbackMessage
-
-      // In unstable LAN conditions, direct browser download can still succeed
-      // even if XHR blob download times out.
-      setError(null)
-      setInfoMessage(`Download request was unstable (${message}). Trying direct browser download fallback…`)
-      try {
-        triggerBrowserNativeDownload()
-      } catch (_fallbackErr) {
-        setError(message)
-        setInfoMessage('')
-      }
-    } finally {
-      setDownloadingRunId('')
-    }
+    // Nothing to await for a native download, so just clear the busy indicator
+    // after a short grace period to prevent accidental double-triggering.
+    window.setTimeout(() => {
+      setDownloadingRunId((current) => (current === runId ? '' : current))
+    }, 3000)
   }
 
   const handlePlayback = async (runId) => {
@@ -802,6 +746,16 @@ export const ExperimentControl = ({
                           onLoadedData={handleCam1PlaybackLoaded}
                           onError={handleCam1PlaybackError}
                         />
+                        {playbackCam1RawUrl && (
+                          <a
+                            className="download-btn playback-download-link"
+                            href={playbackCam1RawUrl}
+                            download={playbackCam1Label.split('/').pop() || `${playbackRunId}_cam1.mp4`}
+                            rel="noopener noreferrer"
+                          >
+                            Download Cam 1 Video
+                          </a>
+                        )}
                       </>
                     ) : (
                       <div className="muted">No Cam 1 recording found in this run.</div>
@@ -824,6 +778,16 @@ export const ExperimentControl = ({
                           onLoadedData={handleCam2PlaybackLoaded}
                           onError={handleCam2PlaybackError}
                         />
+                        {playbackCam2RawUrl && (
+                          <a
+                            className="download-btn playback-download-link"
+                            href={playbackCam2RawUrl}
+                            download={playbackCam2Label.split('/').pop() || `${playbackRunId}_cam2.mp4`}
+                            rel="noopener noreferrer"
+                          >
+                            Download Cam 2 Video
+                          </a>
+                        )}
                       </>
                     ) : (
                       <div className="muted">No Cam 2 recording found in this run.</div>

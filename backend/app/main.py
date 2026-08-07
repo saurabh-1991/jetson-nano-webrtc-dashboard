@@ -11,6 +11,7 @@ import uuid
 import subprocess
 import tempfile
 import shutil
+import zipfile
 import mimetypes
 import hashlib
 import re
@@ -1695,6 +1696,20 @@ async def experiments_delete_run(run_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _build_stored_zip_archive(source_dir: str, archive_path: str) -> str:
+    """Zip a run directory without recompressing (video/mp4 is already compressed,
+    so ZIP_DEFLATED only burns CPU time for no size benefit on Jetson hardware).
+    Layout matches the previous shutil.make_archive(..., root_dir=source_dir)
+    behavior: files sit flat at the archive root, not wrapped in a subfolder."""
+    with zipfile.ZipFile(archive_path, mode="w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
+        for root, _dirs, files in os.walk(source_dir):
+            for name in files:
+                file_path = os.path.join(root, name)
+                arcname = os.path.relpath(file_path, source_dir)
+                zf.write(file_path, arcname)
+    return archive_path
+
+
 @app.get("/api/experiments/{run_id}/download")
 async def experiments_download(run_id: str):
     """Download all run artifacts as a ZIP archive."""
@@ -1735,8 +1750,8 @@ async def experiments_download(run_id: str):
 
         os.makedirs(EXPERIMENTS_DOWNLOAD_ARCHIVE_DIR, exist_ok=True)
         temp_root = tempfile.mkdtemp(prefix="exp-download-", dir=EXPERIMENTS_DOWNLOAD_ARCHIVE_DIR)
-        archive_base = os.path.join(temp_root, run_id)
-        archive_path = await run_in_threadpool(shutil.make_archive, archive_base, "zip", run_dir)
+        archive_path = os.path.join(temp_root, "{0}.zip".format(run_id))
+        await run_in_threadpool(_build_stored_zip_archive, run_dir, archive_path)
 
         return FileResponse(
             archive_path,
