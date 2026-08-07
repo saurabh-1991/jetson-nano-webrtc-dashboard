@@ -22,6 +22,7 @@ from .config import (
     CAMERA1_USB_V4L2_IO_MODE,
     CAMERA1_USB_STARTUP_PROBE,
     CAMERA2_ACCELERATION,
+    CAMERA_PIPELINE_STRATEGY,
     CAMERA2_ADAPTIVE_EXPOSURE,
     CAMERA2_BUFFER_FLUSH_GRABS,
     CAMERA2_CONSECUTIVE_STALL_LIMIT,
@@ -1215,6 +1216,29 @@ class CameraCapture:
         )
         return rebased
 
+    def _build_single_path_source(self):
+        """Choose one deterministic capture source and backend for strict mode."""
+        mode = self.camera_acceleration_mode
+
+        if mode == "compat" and self.opencv_gstreamer_enabled:
+            pipeline = self._build_usb_pipeline_mjpeg_compat(
+                int(self.capture_width),
+                int(self.capture_height),
+                int(self.capture_fps),
+            )
+            return pipeline, cv2.CAP_GSTREAMER, "USB single-path MJPEG compatibility pipeline"
+
+        if mode == "hardware" and self.opencv_gstreamer_enabled and self.hardware_pipeline_eligible:
+            pipeline = self._build_usb_pipeline_mjpeg_hw_stable(
+                int(self.capture_width),
+                int(self.capture_height),
+                int(self.capture_fps),
+            )
+            return pipeline, cv2.CAP_GSTREAMER, "USB single-path hardware pipeline stabilized"
+
+        # Default deterministic path: direct V4L2 camera device access.
+        return self.camera_device, None, "V4L2 single-path direct device"
+
     def _initialize_camera(self):
         """Initialize camera capture"""
         try:
@@ -1241,6 +1265,46 @@ class CameraCapture:
             self.last_camera_error = None
             self.startup_probe_scores = {}
             self.startup_probe_order = []
+
+            if CAMERA_SOURCE == "usb" and CAMERA_PIPELINE_STRATEGY == "single_path":
+                logger.info(
+                    "Camera single-path mode enabled: accel=%s camera=%s",
+                    self.camera_acceleration_mode,
+                    self.camera_id,
+                )
+
+                source, backend, label = self._build_single_path_source()
+                source = self._apply_device_profile_to_pipeline(source) if isinstance(source, str) else source
+
+                if (
+                    self.usb_preflight_validate
+                    and backend == cv2.CAP_GSTREAMER
+                    and isinstance(source, str)
+                    and "v4l2src" in source
+                ):
+                    if not self._gst_preflight_check(source, label):
+                        self.last_camera_error = f"Single-path preflight failed: {label}"
+                        logger.error(self.last_camera_error)
+                        self.is_open = False
+                        return
+
+                cap = self._open_capture(source, backend, label)
+                if cap is not None:
+                    self.cap = cap
+                    self.is_open = True
+                    self._apply_auto_brightness_controls()
+                    self._apply_initial_ir_low_light_controls()
+                    self.selected_pipeline = label
+                    self.selected_pipeline_mode = self._infer_pipeline_mode(label)
+                    self.selected_pipeline_source = source
+                    self.selected_pipeline_backend = backend
+                    logger.info("Camera initialized successfully")
+                    return
+
+                self.last_camera_error = f"Single-path capture failed: {label}"
+                logger.error("Failed to initialize camera in single-path mode")
+                self.is_open = False
+                return
 
             fallback_sources = []
 

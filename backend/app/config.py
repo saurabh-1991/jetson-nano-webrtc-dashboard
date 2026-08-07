@@ -22,6 +22,13 @@ def _parse_optional_camera_accel(var_name: str) -> str:
     return raw if raw in ("", "auto", "hardware", "compat", "direct") else ""
 
 
+def _parse_camera_pipeline_strategy(var_name: str, default_value: str = "adaptive") -> str:
+    raw = str(os.getenv(var_name, default_value)).strip().lower()
+    if raw in ("adaptive", "single_path"):
+        return raw
+    return default_value
+
+
 def _parse_optional_v4l2_io_mode(var_name: str):
     raw = str(os.getenv(var_name, "")).strip()
     if raw == "":
@@ -99,6 +106,7 @@ CAMERA_SOURCE = os.getenv("CAMERA_SOURCE", "usb").lower()  # usb | csi
 CAMERA_ACCELERATION = os.getenv("CAMERA_ACCELERATION", "auto").lower()  # auto | hardware | compat
 CAMERA1_ACCELERATION = _parse_optional_camera_accel("CAMERA1_ACCELERATION")
 CAMERA2_ACCELERATION = _parse_optional_camera_accel("CAMERA2_ACCELERATION")
+CAMERA_PIPELINE_STRATEGY = _parse_camera_pipeline_strategy("CAMERA_PIPELINE_STRATEGY", "adaptive")
 CAMERA_USB_STARTUP_PROBE = os.getenv("CAMERA_USB_STARTUP_PROBE", "true").lower() in (
     "1",
     "true",

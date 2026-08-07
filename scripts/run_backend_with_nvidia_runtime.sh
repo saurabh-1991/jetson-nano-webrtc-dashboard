@@ -85,13 +85,16 @@ docker run -d \
   -e API_DEBUG=False \
   -e LOG_LEVEL=INFO \
   -e CAMERA_SOURCE=usb \
-  -e CAMERA_ENABLED_IDS=cam1,cam2 \
-  -e CAMERA_STRICT_CAMERA_IDS=true \
+  -e CAMERA_ENABLED_IDS="${CAMERA_ENABLED_IDS:-cam1,cam2}" \
+  -e CAMERA_DEFAULT_ID="${CAMERA_DEFAULT_ID:-cam1}" \
+  -e CAMERA_STRICT_CAMERA_IDS="${CAMERA_STRICT_CAMERA_IDS:-true}" \
+  -e WEBRTC_ENABLED_CAMERA_IDS="${WEBRTC_ENABLED_CAMERA_IDS:-cam1}" \
   -e CAMERA1_DEVICE="${CAMERA1_DEVICE:-/dev/video0}" \
   -e CAMERA2_DEVICE="${CAMERA2_DEVICE:-/dev/video1}" \
-  -e CAMERA_ACCELERATION="${CAMERA_ACCELERATION:-auto}" \
-  -e CAMERA1_ACCELERATION="${CAMERA1_ACCELERATION:-auto}" \
-  -e CAMERA2_ACCELERATION="${CAMERA2_ACCELERATION:-auto}" \
+  -e CAMERA_ACCELERATION="${CAMERA_ACCELERATION:-direct}" \
+  -e CAMERA1_ACCELERATION="${CAMERA1_ACCELERATION:-${CAMERA_ACCELERATION:-direct}}" \
+  -e CAMERA2_ACCELERATION="${CAMERA2_ACCELERATION:-${CAMERA_ACCELERATION:-direct}}" \
+  -e CAMERA_PIPELINE_STRATEGY="${CAMERA_PIPELINE_STRATEGY:-single_path}" \
   -e CAMERA_USB_STARTUP_PROBE=false \
   -e CAMERA1_USB_STARTUP_PROBE=false \
   -e CAMERA2_USB_STARTUP_PROBE=false \
@@ -111,7 +114,7 @@ docker run -d \
   -e CAMERA_RECOVERY_BASE_BACKOFF_SECONDS=2.0 \
   -e CAMERA_RECOVERY_BACKOFF_MAX_SECONDS=30.0 \
   -e CAMERA_RECOVERY_MIN_REINIT_INTERVAL_SECONDS=0.75 \
-  -e CAMERA_H264_STREAM_ENABLED=true \
+  -e CAMERA_H264_STREAM_ENABLED="${CAMERA_H264_STREAM_ENABLED:-false}" \
   -e CAMERA_H264_STREAM_USE_GSTREAMER="${CAMERA_H264_STREAM_USE_GSTREAMER:-true}" \
   -e CAMERA_H264_INPUT_MODE="${H264_INPUT_MODE_EFFECTIVE}" \
   -e CAMERA_H264_RTSP_URL="${CAMERA_H264_RTSP_URL:-}" \
@@ -125,8 +128,8 @@ docker run -d \
   -e CAMERA_H264_STREAM_BITRATE="${CAMERA_H264_STREAM_BITRATE:-1200000}" \
   -e CAMERA_H264_STREAM_GOP="${CAMERA_H264_STREAM_GOP:-15}" \
   -e CAMERA_H264_STREAM_MAX_FPS="${CAMERA_H264_STREAM_MAX_FPS:-20}" \
-  -e CAMERA1_H264_STREAM_ENABLED="${CAMERA1_H264_STREAM_ENABLED:-true}" \
-  -e CAMERA2_H264_STREAM_ENABLED="${CAMERA2_H264_STREAM_ENABLED:-true}" \
+  -e CAMERA1_H264_STREAM_ENABLED="${CAMERA1_H264_STREAM_ENABLED:-${CAMERA_H264_STREAM_ENABLED:-false}}" \
+  -e CAMERA2_H264_STREAM_ENABLED="${CAMERA2_H264_STREAM_ENABLED:-${CAMERA_H264_STREAM_ENABLED:-false}}" \
   -e CAMERA1_H264_STREAM_USE_GSTREAMER="${CAMERA1_H264_STREAM_USE_GSTREAMER:-${CAMERA_H264_STREAM_USE_GSTREAMER:-true}}" \
   -e CAMERA2_H264_STREAM_USE_GSTREAMER="${CAMERA2_H264_STREAM_USE_GSTREAMER:-${CAMERA_H264_STREAM_USE_GSTREAMER:-true}}" \
   -e CAMERA1_H264_STREAM_BITRATE="${CAMERA1_H264_STREAM_BITRATE:-${CAMERA_H264_STREAM_BITRATE:-1200000}}" \
@@ -261,12 +264,26 @@ echo "[nvidia-runtime] Camera frame warm-up checks:"
 cam1_warmup_ok=true
 cam2_warmup_ok=true
 
-if ! warmup_frame_check cam1 "$CAM1_WARMUP_ATTEMPTS"; then
-  cam1_warmup_ok=false
+camera_ids_csv=",${CAMERA_ENABLED_IDS:-cam1,cam2},"
+cam1_enabled=false
+cam2_enabled=false
+[[ "$camera_ids_csv" == *",cam1,"* ]] && cam1_enabled=true
+[[ "$camera_ids_csv" == *",cam2,"* ]] && cam2_enabled=true
+
+if [[ "$cam1_enabled" == "true" ]]; then
+  if ! warmup_frame_check cam1 "$CAM1_WARMUP_ATTEMPTS"; then
+    cam1_warmup_ok=false
+  fi
+else
+  echo "[nvidia-runtime] cam1 frame warm-up: skipped (camera disabled)"
 fi
 
-if ! warmup_frame_check cam2 "$CAM2_WARMUP_ATTEMPTS"; then
-  cam2_warmup_ok=false
+if [[ "$cam2_enabled" == "true" ]]; then
+  if ! warmup_frame_check cam2 "$CAM2_WARMUP_ATTEMPTS"; then
+    cam2_warmup_ok=false
+  fi
+else
+  echo "[nvidia-runtime] cam2 frame warm-up: skipped (camera disabled)"
 fi
 
 if [[ "$WARMUP_STRICT" == "true" ]]; then
