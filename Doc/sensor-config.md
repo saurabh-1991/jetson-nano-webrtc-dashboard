@@ -179,3 +179,39 @@ Python edits are only needed if you want to change data model shape, for example
 
 For normal field retuning (IP, slave ID, register addresses, scale, decimal), only environment/config changes are required.
 
+## 9. Field troubleshooting commands (copy/paste)
+
+1) Check backend and frontend status:
+
+`docker-compose ps`
+
+`curl -s -o /dev/null -w 'backend:%{http_code}\n' http://127.0.0.1:8000/docs`
+
+`curl -s -o /dev/null -w 'frontend:%{http_code}\n' http://127.0.0.1:80/`
+
+2) Check live sensor payload and source:
+
+`curl -s http://127.0.0.1:8000/api/sensors/latest`
+
+3) Inspect backend logs for Modbus and flow errors:
+
+`docker logs --tail 300 jetson-nano-backend`
+
+`docker logs --tail 300 jetson-nano-backend | grep -Ei 'modbus|flow|connect|timeout|unavailable|exception'`
+
+4) Verify effective backend environment values:
+
+`docker exec -it jetson-nano-backend sh -lc "env | grep -E 'MODBUS_|FLOW_METER_' | sort"`
+
+5) Confirm gateway reachability from Jetson:
+
+`ping -c 3 <WAVESHARE_IP>`
+
+`nc -vz <WAVESHARE_IP> 502`
+
+6) If backend failed after recreate, recover quickly:
+
+`docker rm -f jetson-nano-backend`
+
+`./scripts/run_backend_with_nvidia_runtime.sh`
+
