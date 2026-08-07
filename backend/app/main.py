@@ -79,8 +79,13 @@ from .camera import (
 )
 from .gpio_control import get_gpio_controller
 from . import gpio_control as gpio_module
-from .vfd_control import get_vfd_controller
-from . import vfd_control as vfd_module
+from .vfd_control import (
+    get_vfd_controller,
+    get_all_vfd_statuses,
+    get_available_vfd_ids,
+    force_stop_all_vfds,
+    cleanup_all_vfds,
+)
 from .sensor_data import get_sensor_data_service
 from .event_logger import get_event_logger
 from .experiments import get_experiment_manager
@@ -1104,12 +1109,10 @@ async def safety_watchdog_loop():
             stale_control = (now_ts - last_control_activity_ts) > CONTROL_HEARTBEAT_TIMEOUT_SECONDS
 
             if stale_frontend and stale_control:
-                vfd = get_vfd_controller()
-                vfd_status = vfd.get_status()
-                vfd_was_running = bool(vfd_status.get("is_running"))
-                vfd_stopped = True
-                if vfd_was_running:
-                    vfd_stopped = vfd.force_stop(reason="safety_watchdog_timeout")
+                vfd_statuses = get_all_vfd_statuses()
+                vfd_was_running = any(bool(s.get("is_running")) for s in vfd_statuses.values())
+                vfd_stop_results = force_stop_all_vfds(reason="safety_watchdog_timeout") if vfd_was_running else {}
+                vfd_stopped = all(bool(ok) for ok in vfd_stop_results.values()) if vfd_was_running else True
 
                 gpio = get_gpio_controller()
                 gpio_was_on = gpio.any_output_on()
@@ -1128,6 +1131,7 @@ async def safety_watchdog_loop():
                             "success": bool(success and vfd_stopped),
                             "gpio_success": bool(success),
                             "vfd_success": bool(vfd_stopped),
+                            "vfd_results": vfd_stop_results,
                             "timeout_seconds": CONTROL_HEARTBEAT_TIMEOUT_SECONDS,
                             "safety_reset_count": safety_reset_count,
                         },
@@ -1156,8 +1160,7 @@ def cleanup_resources():
     except Exception as e:
         logger.warning(f"GPIO cleanup failed at exit: {e}")
     try:
-        if getattr(vfd_module, 'vfd_controller', None) is not None:
-            vfd_module.vfd_controller.cleanup()
+        cleanup_all_vfds()
     except Exception as e:
         logger.warning(f"VFD cleanup failed at exit: {e}")
 
@@ -1238,8 +1241,7 @@ async def on_shutdown():
     release_all_cameras()
     if getattr(gpio_module, 'gpio_controller', None) is not None:
         gpio_module.gpio_controller.cleanup()
-    if getattr(vfd_module, 'vfd_controller', None) is not None:
-        vfd_module.vfd_controller.cleanup()
+    cleanup_all_vfds()
 
 # Add CORS middleware
 app.add_middleware(
@@ -2577,12 +2579,31 @@ async def gpio_toggle():
 # ==================== VFD ENDPOINTS ====================
 
 @app.get("/api/vfd/status")
-async def vfd_status():
-    """Get VFD control availability and cached runtime state."""
-    vfd = get_vfd_controller()
+async def vfd_status(vfd_id: str = None):
+    """Get VFD control availability and cached runtime state.
+
+    Backward compatibility:
+    - without vfd_id returns primary `vfd` and all `vfds`
+    - with vfd_id returns selected `vfd` and all `vfds`
+    """
+    selected_id = str(vfd_id or "vfd1").strip().lower()
+    if selected_id not in get_available_vfd_ids():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_vfd_id",
+                "vfd_id": selected_id,
+                "available_vfd_ids": get_available_vfd_ids(),
+            },
+        )
+
+    vfd = get_vfd_controller(selected_id)
+    all_statuses = get_all_vfd_statuses()
     return {
         "success": True,
+        "vfd_id": selected_id,
         "vfd": vfd.get_status(),
+        "vfds": all_statuses,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -2597,9 +2618,21 @@ async def vfd_run(payload: Dict[str, Any]):
     if not isinstance(run, bool):
         raise HTTPException(status_code=400, detail="'run' must be boolean")
 
-    vfd = get_vfd_controller()
+    vfd_id = str(payload.get("vfd_id") or "vfd1").strip().lower()
+    if vfd_id not in get_available_vfd_ids():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_vfd_id",
+                "vfd_id": vfd_id,
+                "available_vfd_ids": get_available_vfd_ids(),
+            },
+        )
+
+    vfd = get_vfd_controller(vfd_id)
     result = await run_in_threadpool(vfd.set_run_state, run)
     state = vfd.get_status()
+    all_statuses = get_all_vfd_statuses()
 
     get_event_logger().log_event(
         source="backend",
@@ -2607,6 +2640,7 @@ async def vfd_run(payload: Dict[str, Any]):
         severity="info" if result else "warning",
         payload={
             "message": f"VFD run state set to {'RUN' if run else 'STOP'} ({'success' if result else 'failed'})",
+            "vfd_id": vfd_id,
             "run": bool(run),
             "result": bool(result),
             "vfd_state": state,
@@ -2615,7 +2649,9 @@ async def vfd_run(payload: Dict[str, Any]):
 
     return {
         "success": bool(result),
+        "vfd_id": vfd_id,
         "vfd": state,
+        "vfds": all_statuses,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -2628,9 +2664,21 @@ async def vfd_speed(payload: Dict[str, Any]):
 
     speed_hz = payload.get("speed_hz")
 
-    vfd = get_vfd_controller()
+    vfd_id = str(payload.get("vfd_id") or "vfd1").strip().lower()
+    if vfd_id not in get_available_vfd_ids():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_vfd_id",
+                "vfd_id": vfd_id,
+                "available_vfd_ids": get_available_vfd_ids(),
+            },
+        )
+
+    vfd = get_vfd_controller(vfd_id)
     result = await run_in_threadpool(vfd.set_speed_hz, speed_hz)
     state = vfd.get_status()
+    all_statuses = get_all_vfd_statuses()
     ok = bool(result.get("success"))
 
     severity = "info" if ok else "warning"
@@ -2644,6 +2692,7 @@ async def vfd_speed(payload: Dict[str, Any]):
                 if ok
                 else f"VFD speed set failed: {result.get('error')}"
             ),
+            "vfd_id": vfd_id,
             "result": result,
             "vfd_state": state,
         },
@@ -2654,8 +2703,10 @@ async def vfd_speed(payload: Dict[str, Any]):
 
     return {
         "success": ok,
+        "vfd_id": vfd_id,
         "result": result,
         "vfd": state,
+        "vfds": all_statuses,
         "timestamp": datetime.now().isoformat(),
     }
 

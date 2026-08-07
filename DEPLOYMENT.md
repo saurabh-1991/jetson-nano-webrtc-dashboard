@@ -1,72 +1,121 @@
 # Deployment Guide (Jetson Nano / JetPack 4.6)
 
-This runbook is for field and lab deployment. It includes:
+This document is a field-first, offline runbook intended for engineers who may have no internet at site.
 
-- exact deployment commands,
-- where to change Modbus/Waveshare/VFD/flow settings,
-- restart choices (compose vs NVIDIA runtime),
-- troubleshooting with logs and diagnostics.
+It includes:
 
-## 1) Recommended model
+- exact command-by-command procedures,
+- expected results after each step,
+- dual-VFD + sensor + camera verification,
+- failure recovery flows that do not depend on online resources.
+
+## 1) Scope and operating model
 
 Use this model in production:
 
-- Boot reliability with powerrun scripts
-- Manual controlled updates when internet is available
-- Backend launched through NVIDIA runtime script when required by camera/OpenCV CUDA path
+- device boot/network behavior managed by powerrun scripts,
+- routine service restart through docker-compose,
+- backend recovery through NVIDIA runtime launcher when CUDA/OpenCV path is required.
 
-Main scripts:
+Primary scripts:
 
 - `scripts/powerrun_apply_all.sh`
+- `scripts/deploy_frontend_backend.sh`
 - `scripts/run_backend_with_nvidia_runtime.sh`
 - `scripts/deploy_online_update.sh`
+- `scripts/run_native_dashboard.sh`
+- `scripts/stop_native_dashboard.sh`
 
-## 2) Prerequisites
+## 2) Prerequisites checklist (offline friendly)
 
-- Jetson Nano with JetPack 4.6
-- Docker and docker-compose installed
-- Project checked out on Jetson
-- Camera devices present under `/dev/video*`
-- Waveshare/data logger reachable on LAN when using Modbus TCP
+Required:
 
-## 3) File locations for field configuration
+- Jetson Nano on JetPack 4.6
+- Docker engine and docker-compose command available
+- project folder present on Jetson disk
+- camera devices present in `/dev/video*`
+- Waveshare/DataLogger network reachable over LAN for Modbus TCP
 
-Primary configuration file:
+Run and confirm before any deployment:
 
-- `docker-compose.yml`
+```bash
+cd /path/to/POC_Project_1
+pwd
+ls
+docker --version
+docker-compose --version
+ls /dev/video*
+```
 
-Sensor register mapping guide:
+Expected results:
 
-- `Doc/sensor-config.md`
+- `pwd` shows the project root.
+- `docker --version` and `docker-compose --version` both print versions.
+- `ls /dev/video*` returns one or more camera nodes (example: `/dev/video0`).
 
-NVIDIA backend runtime launcher:
+If `docker-compose` is not found, do not continue deployment. Resolve local environment first.
 
-- `scripts/run_backend_with_nvidia_runtime.sh`
+## 3) Important files for field edits
 
-## 4) First deployment on Jetson
+- Main runtime settings: `docker-compose.yml`
+- Sensor/register map reference: `Doc/sensor-config.md`
+- NVIDIA backend launcher: `scripts/run_backend_with_nvidia_runtime.sh`
+- Boot/network setup values: `scripts/powerrun.config`
 
-From project root on Jetson:
+## 4) First-time bring-up on a Jetson device
 
-1. Edit boot/network/autologin values in `scripts/powerrun.config`.
-2. Run one-time base setup:
-   - `sudo ./scripts/powerrun_apply_all.sh`
-3. Build and start base stack:
-   - `docker-compose up -d --build`
-4. If backend needs NVIDIA runtime path:
-   - `./scripts/run_backend_with_nvidia_runtime.sh`
+### Step 1: configure boot/network values
 
-## 5) Field update when you receive real gateway IP/registers
+Edit `scripts/powerrun.config` with site-specific values.
 
-Edit `docker-compose.yml` backend environment values.
+### Step 2: apply one-time host setup
 
-Minimum values for datalogger via Waveshare (no USB Modbus converter required):
+```bash
+sudo ./scripts/powerrun_apply_all.sh
+```
+
+Expected result:
+
+- script exits without error,
+- service/boot configuration is applied.
+
+### Step 3: build and start stack
+
+```bash
+docker-compose up -d --build
+docker-compose ps
+```
+
+Expected result:
+
+- services appear as `Up` in `docker-compose ps`.
+
+### Step 4: switch backend to NVIDIA runtime path (recommended)
+
+```bash
+./scripts/run_backend_with_nvidia_runtime.sh
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+```
+
+Expected result:
+
+- backend container starts successfully,
+- backend status remains `Up` (not restarting).
+
+## 5) Field configuration (Modbus, flow, dual VFD)
+
+Edit backend environment values in `docker-compose.yml`.
+
+### 5.1 Datalogger via Waveshare (no USB-TTL converter)
+
+Required baseline:
 
 - `MODBUS_TRANSPORT=tcp`
 - `MODBUS_HOST=<WAVESHARE_OR_DATALOGGER_GATEWAY_IP>`
 - `MODBUS_TCP_PORT=502`
 - `MODBUS_SLAVE_ID=<LOGGER_SLAVE_ID>`
 
-Flow meter (enabled by default):
+### 5.2 Flow meter configuration
 
 - `FLOW_METER_ENABLED=true`
 - `FLOW_METER_TRANSPORT=tcp`
@@ -74,199 +123,490 @@ Flow meter (enabled by default):
 - `FLOW_METER_TCP_PORT=502`
 - `FLOW_METER_SLAVE_ID=<FLOW_SLAVE_ID>`
 - `FLOW_METER_VALUE_ADDRESS=<REGISTER>`
-- Optional: `FLOW_METER_DECIMAL_ADDRESS`, `FLOW_METER_STATUS_ADDRESS`
+- optional: `FLOW_METER_DECIMAL_ADDRESS`, `FLOW_METER_STATUS_ADDRESS`
 
-Temperature channels (if field map differs):
+### 5.3 Dual VFD configuration (VFD #1 and VFD #2)
+
+VFD #1:
+
+- `VFD_ENABLED=true`
+- `VFD_HOST=<VFD1_IP>`
+- `VFD_PORT=502`
+- `VFD_SLAVE_ID=<VFD1_SLAVE_ID>`
+
+VFD #2:
+
+- `VFD2_ENABLED=true`
+- `VFD2_HOST=<VFD2_IP>`
+- `VFD2_PORT=502`
+- `VFD2_SLAVE_ID=<VFD2_SLAVE_ID>`
+
+Optional per-drive tuning:
+
+- speed bounds and scaling: `VFD_MIN_SPEED_HZ`, `VFD_MAX_SPEED_HZ`, `VFD_SPEED_SCALE`
+- command registers: `VFD_RUN_COMMAND_REGISTER`, `VFD_SPEED_COMMAND_REGISTER`
+- mirror values for VFD2 with `VFD2_*`
+
+### 5.4 Temperature register mapping
+
+Set if field map differs:
 
 - `MODBUS_ADDR_HOT_ZONE_VALUE`, `MODBUS_ADDR_HOT_ZONE_DECIMAL`, `MODBUS_ADDR_HOT_ZONE_STATUS`
 - `MODBUS_ADDR_COLD_ZONE_VALUE`, `MODBUS_ADDR_COLD_ZONE_DECIMAL`, `MODBUS_ADDR_COLD_ZONE_STATUS`
 - `MODBUS_ADDR_EXHAUST_VALUE`, `MODBUS_ADDR_EXHAUST_DECIMAL`, `MODBUS_ADDR_EXHAUST_STATUS`
 
-If manual uses 30001/40001 style logical addresses:
+If manual uses logical addresses (30001/40001 style):
 
-- set `MODBUS_ADDRESS_BASE`
-- keep address values as in manual
+- set `MODBUS_ADDRESS_BASE`,
+- keep register numbers consistent with the manual convention.
 
-## 6) Which restart command to run after config changes
+## 6) Restart decision table after config changes
 
-### A) Compose-only backend restart
+Preferred single-command deploy (frontend + backend together):
 
-Use when you are not relying on NVIDIA runtime replacement:
+```bash
+./scripts/deploy_frontend_backend.sh
+```
 
-- `docker-compose up -d --build jetson-backend`
+Rebuild images then deploy frontend + backend together:
 
-### B) NVIDIA runtime backend restart (recommended on this branch)
+```bash
+./scripts/deploy_frontend_backend.sh --rebuild
+```
 
-Use when backend is expected to run with runtime nvidia:
+Compose-only mode (skip runtime=nvidia backend replacement):
 
-- `./scripts/run_backend_with_nvidia_runtime.sh`
+```bash
+./scripts/deploy_frontend_backend.sh --rebuild --no-nvidia-backend
+```
 
-Notes:
+Expected result:
 
-- Full frontend rebuild is not required for sensor IP/register changes.
-- If frontend did not change, restart only backend.
+- script prints backend and frontend HTTP checks,
+- both endpoints should return `200`:
+  - backend: `http://127.0.0.1:8000/docs`
+  - frontend: `http://127.0.0.1:80/`
 
-## 7) Day-to-day operation
+Use compose-only backend restart when backend runtime is standard:
 
-Start/stop stack:
+```bash
+docker-compose up -d --build jetson-backend
+```
 
-- start: `docker-compose up -d`
-- stop: `docker-compose down --remove-orphans`
+Use NVIDIA runtime launcher when this branch/site depends on CUDA/OpenCV runtime libraries:
 
-Controlled online refresh:
+```bash
+./scripts/run_backend_with_nvidia_runtime.sh
+```
 
-- `./scripts/deploy_online_update.sh`
-- optional git sync: `./scripts/deploy_online_update.sh --sync-git --branch <branch>`
+Expected result for either path:
 
-## 7.1) Docker engine stop/start/restart (host-level)
+- backend becomes healthy and responds with HTTP 200 on `/docs`.
 
-Use these only when container-level restart is not enough.
+Note: sensor IP/register changes do not require frontend rebuild.
 
-1. Stop Docker engine (stops all running containers):
-   - `sudo systemctl stop docker`
-2. Start Docker engine:
-   - `sudo systemctl start docker`
-3. Restart Docker engine:
-   - `sudo systemctl restart docker`
-4. Check Docker engine status:
-   - `sudo systemctl status docker --no-pager`
-5. Confirm engine + containers visible again:
-   - `docker ps`
+## 7) Standard daily operations
 
-If `systemctl` is unavailable in your target image, use:
+Start all services:
 
-- `sudo service docker restart`
+```bash
+docker-compose up -d
+```
 
-## 8) Post-deploy verification checklist
+Stop all services:
 
-Run on Jetson:
+```bash
+docker-compose down --remove-orphans
+```
 
-1. Containers and status:
-   - `docker-compose ps`
-2. Backend health:
-   - `curl -s -o /dev/null -w 'backend:%{http_code}\n' http://127.0.0.1:8000/docs`
-3. Frontend health:
-   - `curl -s -o /dev/null -w 'frontend:%{http_code}\n' http://127.0.0.1:80/`
-4. Sensor payload:
-   - `curl -s http://127.0.0.1:8000/api/sensors/latest`
-5. Camera state:
-   - `curl -s "http://127.0.0.1:8000/api/camera/info?camera_id=cam1&create_if_missing=true"`
-   - `curl -s "http://127.0.0.1:8000/api/camera/info?camera_id=cam2&create_if_missing=true"`
+Controlled update flow (internet available only):
 
-Interpret sensor source quickly:
+```bash
+./scripts/deploy_online_update.sh
+./scripts/deploy_online_update.sh --sync-git --branch <branch>
+```
 
-- `modbus`: logger and flow both read OK
-- `modbus_partial`: one path OK, one path unavailable
-- `modbus_unavailable`: no Modbus data currently available
+## 8) Host-level Docker control (only if container restart is insufficient)
 
-## 8.1) How datalogger temperature/flow reaches Jetson UI
+Stop Docker engine:
 
-Field path:
+```bash
+sudo systemctl stop docker
+```
 
-1. Sensors and flow meter are wired to the datalogger (Modbus RTU map).
-2. Datalogger RS485 lines are connected to Waveshare RS485-to-Ethernet gateway.
-3. Jetson backend polls gateway by TCP (`MODBUS_HOST`, `MODBUS_TCP_PORT`, `FLOW_METER_HOST`, `FLOW_METER_TCP_PORT`).
-4. Backend decodes registers in `app/sensor_data.py` using map/settings from `app/modbus_sensor_config.py` and env vars.
-5. Backend serves values at `/api/sensors/latest`.
-6. Frontend reads backend API and renders temperatures/flow in UI widgets.
+Start Docker engine:
 
-Field verification sequence:
+```bash
+sudo systemctl start docker
+```
 
-1. Gateway reachable from Jetson:
-   - `ping -c 3 <WAVESHARE_IP>`
-   - `nc -vz <WAVESHARE_IP> 502`
-2. Backend has correct env loaded:
-   - `docker exec -it jetson-nano-backend sh -lc "env | grep -E 'MODBUS_|FLOW_METER_' | sort"`
-3. Backend API has decoded payload:
-   - `curl -s http://127.0.0.1:8000/api/sensors/latest`
-4. UI/backend connectivity:
-   - `curl -s -o /dev/null -w 'frontend:%{http_code}\n' http://127.0.0.1:80/`
-   - `curl -s -o /dev/null -w 'backend:%{http_code}\n' http://127.0.0.1:8000/docs`
+Restart Docker engine:
 
-If step 3 shows `modbus_unavailable`, issue is before UI (gateway/IP/slave/register/runtime config).
+```bash
+sudo systemctl restart docker
+```
 
-## 9) Troubleshooting and analysis commands
+Check engine status:
 
-### A) Backend does not start or keeps restarting
+```bash
+sudo systemctl status docker --no-pager
+docker ps
+```
 
-1. Check restart state:
-   - `docker-compose ps`
-2. Inspect backend logs:
-   - `docker logs --tail 200 jetson-nano-backend`
-   - `docker-compose logs --tail 200 jetson-backend`
-3. If import/runtime mismatch is seen (for example CUDA/OpenCV shared library errors), re-run:
-   - `./scripts/run_backend_with_nvidia_runtime.sh`
+Fallback when systemd service layout differs:
 
-### B) Frontend is up but API fails
+```bash
+sudo service docker restart
+```
 
-1. Compare status codes:
-   - `curl -s -o /dev/null -w 'backend:%{http_code}\n' http://127.0.0.1:8000/docs`
-   - `curl -s -o /dev/null -w 'frontend:%{http_code}\n' http://127.0.0.1:80/`
-2. Backend logs:
-   - `docker logs --tail 300 jetson-nano-backend`
-3. Network reachability from backend container:
-   - `docker exec -it jetson-nano-backend sh -lc "ip route; cat /etc/resolv.conf"`
+Expected result:
 
-### C) Modbus values unavailable
+- `docker ps` prints container table, not daemon connection errors.
 
-1. Confirm effective env inside backend container:
-   - `docker exec -it jetson-nano-backend sh -lc "env | grep -E 'MODBUS_|FLOW_METER_' | sort"`
-2. Verify API output:
-   - `curl -s http://127.0.0.1:8000/api/sensors/latest`
-3. Look for connection warnings in logs:
-   - `docker logs --tail 300 jetson-nano-backend | grep -Ei 'modbus|flow|connect|timeout|unavailable|exception'`
-4. Validate IP/port reachability from Jetson:
-   - `ping -c 3 <WAVESHARE_IP>`
-   - `nc -vz <WAVESHARE_IP> 502`
-5. If register map is uncertain, re-check values in `Doc/sensor-config.md` and data logger manual.
+## 9) Mandatory post-deploy validation with expected results
 
-### D) Container name conflict errors (common during recreate)
+Run in this order.
 
-Symptom example: container name already in use.
+### 9.1 Container state
 
-Fix:
+```bash
+docker-compose ps
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+```
 
-1. Remove stale container:
-   - `docker rm -f jetson-nano-backend`
-2. Start again:
-   - `docker-compose up -d --no-deps jetson-backend`
+Expected result:
 
-### E) Camera stuck or no live frames
+- frontend and backend are present,
+- status is `Up`.
 
-1. Trigger recover endpoint:
-   - `curl -X POST http://127.0.0.1:8000/api/camera/recover`
-2. Check camera diagnostics:
-   - `curl -s "http://127.0.0.1:8000/api/camera/info?camera_id=cam1&create_if_missing=true"`
-3. Backend logs:
-   - `docker logs --tail 300 jetson-nano-backend | grep -Ei 'camera|v4l|gstreamer|recover|error'`
+### 9.2 Backend HTTP health
 
-### F) Quick container and image audit
+```bash
+curl -s -o /dev/null -w 'backend:%{http_code}\n' http://127.0.0.1:8000/docs
+```
 
-- running containers: `docker ps`
-- compose status: `docker-compose ps`
-- recent exits: `docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'`
-- backend image id: `docker image inspect jetsonnanowebrtcdashboard_jetson-backend:latest --format '{{.Id}}'`
+Expected result:
 
-## 10) Safe shutdown and rollback
+- prints `backend:200`.
 
-Stop stack:
+### 9.3 Frontend HTTP health
 
-- `docker-compose down --remove-orphans`
+```bash
+curl -s -o /dev/null -w 'frontend:%{http_code}\n' http://127.0.0.1:80/
+```
 
-Stop native mode if used:
+Expected result:
 
-- `./scripts/stop_native_dashboard.sh`
+- prints `frontend:200`.
 
-If static IP setup causes access issues:
+### 9.4 Sensor payload validity
 
-- revert interface to DHCP with NetworkManager
-- fix `scripts/powerrun.config`
-- reapply `sudo ./scripts/powerrun_apply_all.sh`
+```bash
+curl -s http://127.0.0.1:8000/api/sensors/latest
+```
 
-## 11) Related docs
+Expected result:
 
-- `README.md` for overview
-- `DEVELOPMENT.md` for contributor workflow
-- `Doc/sensor-config.md` for register/IP mapping details
-- `Doc/operator-quick-card-v1.2.0.md` for operator quick use
-- `Doc/UAT-checklist-v1.1.0.md` for validation checklist
+- valid JSON,
+- `source` should be one of:
+  - `modbus` (best: logger and flow are both available),
+  - `modbus_partial` (one available, one unavailable),
+  - `modbus_unavailable` (no valid Modbus reads).
+
+### 9.5 Camera diagnostics
+
+```bash
+curl -s "http://127.0.0.1:8000/api/camera/info?camera_id=cam1&create_if_missing=true"
+curl -s "http://127.0.0.1:8000/api/camera/info?camera_id=cam2&create_if_missing=true"
+```
+
+Expected result:
+
+- both return JSON without server error.
+
+### 9.6 Dual VFD endpoint validation
+
+VFD #1 status:
+
+```bash
+curl -s "http://127.0.0.1:8000/api/vfd/status?vfd_id=vfd1"
+```
+
+VFD #2 status:
+
+```bash
+curl -s "http://127.0.0.1:8000/api/vfd/status?vfd_id=vfd2"
+```
+
+Expected result:
+
+- JSON with `success: true`,
+- each call includes selected `vfd` and aggregated `vfds` map.
+
+Optional command test:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/vfd/run -H "Content-Type: application/json" -d '{"vfd_id":"vfd1","run":false}'
+curl -s -X POST http://127.0.0.1:8000/api/vfd/run -H "Content-Type: application/json" -d '{"vfd_id":"vfd2","run":false}'
+```
+
+Expected result:
+
+- both return success JSON,
+- `vfd_id` in response matches request.
+
+## 10) Data-path verification (sensor to UI)
+
+Signal chain:
+
+1. Field sensors and flow meter feed datalogger registers.
+2. Datalogger RS485 connects to Waveshare RS485-to-Ethernet gateway.
+3. Backend polls Modbus TCP gateway via configured host/port/slave values.
+4. Backend decodes register map and publishes `/api/sensors/latest`.
+5. Frontend reads backend API and renders values.
+
+Offline diagnostic commands:
+
+```bash
+ping -c 3 <WAVESHARE_IP>
+nc -vz <WAVESHARE_IP> 502
+docker exec -it jetson-nano-backend sh -lc "env | grep -E 'MODBUS_|FLOW_METER_|VFD|VFD2_' | sort"
+curl -s http://127.0.0.1:8000/api/sensors/latest
+```
+
+Expected result:
+
+- ping succeeds,
+- TCP 502 is reachable,
+- env output matches site sheet,
+- sensor API returns JSON.
+
+## 11) Troubleshooting playbooks (symptom -> command -> expected)
+
+### 11.1 Backend keeps restarting or exits
+
+Commands:
+
+```bash
+docker-compose ps
+docker logs --tail 300 jetson-nano-backend
+docker-compose logs --tail 300 jetson-backend
+```
+
+Expected clues:
+
+- import/shared-library failures,
+- Modbus/connectivity warnings,
+- camera initialization failures.
+
+If CUDA/OpenCV library issue appears (example: libcublas missing), run:
+
+```bash
+./scripts/run_backend_with_nvidia_runtime.sh
+```
+
+### 11.2 Frontend opens but data/actions fail
+
+Commands:
+
+```bash
+curl -s -o /dev/null -w 'backend:%{http_code}\n' http://127.0.0.1:8000/docs
+curl -s -o /dev/null -w 'frontend:%{http_code}\n' http://127.0.0.1:80/
+docker logs --tail 300 jetson-nano-backend
+```
+
+Expected interpretation:
+
+- `frontend:200` + `backend!=200` means backend issue,
+- both 200 but UI stale usually indicates browser/session/cache or API payload issue.
+
+### 11.3 Sensors show modbus_unavailable
+
+Commands:
+
+```bash
+docker exec -it jetson-nano-backend sh -lc "env | grep -E 'MODBUS_|FLOW_METER_' | sort"
+curl -s http://127.0.0.1:8000/api/sensors/latest
+docker logs --tail 300 jetson-nano-backend | grep -Ei 'modbus|flow|connect|timeout|unavailable|exception'
+ping -c 3 <WAVESHARE_IP>
+nc -vz <WAVESHARE_IP> 502
+```
+
+Expected interpretation:
+
+- wrong env -> fix compose and restart backend,
+- unreachable gateway -> fix cable/switch/IP,
+- reachable gateway + still unavailable -> verify slave ID/register map.
+
+### 11.4 VFD control unavailable or no effect
+
+Commands:
+
+```bash
+curl -s "http://127.0.0.1:8000/api/vfd/status?vfd_id=vfd1"
+curl -s "http://127.0.0.1:8000/api/vfd/status?vfd_id=vfd2"
+docker exec -it jetson-nano-backend sh -lc "env | grep -E '^VFD|^VFD2_' | sort"
+docker logs --tail 300 jetson-nano-backend | grep -Ei 'vfd|modbus|connect|write|exception'
+```
+
+Expected interpretation:
+
+- `enabled=false` or `host_configured=false` means incomplete env,
+- `last_error=modbus_connect_failed` suggests network/slave/IP issue,
+- write errors suggest register/slave mismatch.
+
+### 11.5 Container name conflict during recreate
+
+Symptoms:
+
+- message similar to container name already in use.
+
+Commands:
+
+```bash
+docker rm -f jetson-nano-backend
+docker-compose up -d --no-deps jetson-backend
+```
+
+Expected result:
+
+- backend recreated and listed as Up.
+
+### 11.6 Camera stuck or blank stream
+
+Commands:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/camera/recover
+curl -s "http://127.0.0.1:8000/api/camera/info?camera_id=cam1&create_if_missing=true"
+curl -s "http://127.0.0.1:8000/api/camera/info?camera_id=cam2&create_if_missing=true"
+docker logs --tail 300 jetson-nano-backend | grep -Ei 'camera|v4l|gstreamer|recover|error'
+```
+
+Expected result:
+
+- camera info shows valid state and stream can restart.
+
+### 11.7 Quick audit commands for field reports
+
+```bash
+date
+hostname
+ip -brief a
+docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedSince}}'
+docker image inspect jetsonnanowebrtcdashboard_jetson-backend:latest --format '{{.Id}}'
+```
+
+Expected use:
+
+- capture output in report for remote support analysis.
+
+## 12) Safe cleanup, prune, and rollback guidance
+
+Stop stack safely:
+
+```bash
+docker-compose down --remove-orphans
+```
+
+Stop native runtime mode if used:
+
+```bash
+./scripts/stop_native_dashboard.sh
+```
+
+Conservative cleanup (safe first):
+
+```bash
+docker container prune -f
+docker image prune -f
+```
+
+Aggressive cleanup (only if you can rebuild locally and have enough time):
+
+```bash
+docker system prune -a -f --volumes
+```
+
+Expected caution:
+
+- aggressive prune removes stopped containers, dangling and unused images, and unused volumes/network artifacts.
+
+Rollback strategy:
+
+1. Restore last known-good `docker-compose.yml` and config files.
+2. Recreate stack:
+
+```bash
+docker-compose up -d --build
+./scripts/run_backend_with_nvidia_runtime.sh
+```
+
+3. Re-run section 9 validation.
+
+## 13) Offline operation guidance
+
+When no internet is available:
+
+- do not depend on apt/pip/npm installs on site,
+- avoid destructive cleanups unless required,
+- preserve logs before restart loops,
+- keep a local copy of this repository and configuration snapshots.
+
+Recommended field backup commands before major change:
+
+```bash
+mkdir -p /tmp/jetson-field-backup
+cp docker-compose.yml /tmp/jetson-field-backup/docker-compose.yml.$(date +%Y%m%d_%H%M%S)
+docker-compose ps > /tmp/jetson-field-backup/compose_ps.$(date +%Y%m%d_%H%M%S).txt
+docker ps -a > /tmp/jetson-field-backup/docker_ps_a.$(date +%Y%m%d_%H%M%S).txt
+```
+
+## 14) One-command health snapshot for support handoff
+
+Run this block and share the saved file:
+
+```bash
+OUT="/tmp/jetson_health_$(date +%Y%m%d_%H%M%S).log"
+{
+  echo "=== TIME ==="
+  date
+  echo "=== HOST ==="
+  hostname
+  echo "=== IP ==="
+  ip -brief a
+  echo "=== DOCKER PS ==="
+  docker ps -a
+  echo "=== COMPOSE PS ==="
+  docker-compose ps
+  echo "=== BACKEND 200 CHECK ==="
+  curl -s -o /dev/null -w 'backend:%{http_code}\n' http://127.0.0.1:8000/docs
+  echo "=== FRONTEND 200 CHECK ==="
+  curl -s -o /dev/null -w 'frontend:%{http_code}\n' http://127.0.0.1:80/
+  echo "=== SENSOR PAYLOAD ==="
+  curl -s http://127.0.0.1:8000/api/sensors/latest
+  echo
+  echo "=== VFD1 STATUS ==="
+  curl -s "http://127.0.0.1:8000/api/vfd/status?vfd_id=vfd1"
+  echo
+  echo "=== VFD2 STATUS ==="
+  curl -s "http://127.0.0.1:8000/api/vfd/status?vfd_id=vfd2"
+  echo
+  echo "=== BACKEND LOG TAIL ==="
+  docker logs --tail 200 jetson-nano-backend
+} > "$OUT" 2>&1
+echo "Saved: $OUT"
+```
+
+Expected result:
+
+- a single log file is created under `/tmp` containing key diagnostics.
+
+## 15) Related references
+
+- `README.md` for overall architecture
+- `DEVELOPMENT.md` for development workflow
+- `Doc/sensor-config.md` for sensor and Modbus mapping details
+- `Doc/operator-quick-card-v1.2.0.md` for operator shortcuts
+- `Doc/UAT-checklist-v1.1.0.md` for acceptance checks

@@ -502,24 +502,48 @@ GPIO_BUTTON_PIN = 16
 
 # Delta VFD (MS300) Modbus TCP control configuration.
 # Keep disabled by default until networking/register mapping is verified on-site.
-VFD_ENABLED = _parse_bool_with_default("VFD_ENABLED", False)
-VFD_HOST = os.getenv("VFD_HOST", "").strip()
-VFD_PORT = max(1, int(os.getenv("VFD_PORT", "502")))
-VFD_SLAVE_ID = max(1, int(os.getenv("VFD_SLAVE_ID", "1")))
-VFD_TIMEOUT_SECONDS = max(0.2, float(os.getenv("VFD_TIMEOUT_SECONDS", "1.0")))
-VFD_MIN_SPEED_HZ = float(os.getenv("VFD_MIN_SPEED_HZ", "0.0"))
-VFD_MAX_SPEED_HZ = float(os.getenv("VFD_MAX_SPEED_HZ", "50.0"))
-VFD_DEFAULT_SPEED_HZ = float(os.getenv("VFD_DEFAULT_SPEED_HZ", "0.0"))
-VFD_SPEED_SCALE = max(1, int(os.getenv("VFD_SPEED_SCALE", "100")))
+def _build_vfd_profile(prefix: str, default_enabled: bool = False) -> dict:
+    enabled = _parse_bool_with_default(f"{prefix}_ENABLED", default_enabled)
+    return {
+        "enabled": bool(enabled),
+        "host": os.getenv(f"{prefix}_HOST", "").strip(),
+        "port": max(1, int(os.getenv(f"{prefix}_PORT", "502"))),
+        "slave_id": max(1, int(os.getenv(f"{prefix}_SLAVE_ID", "1"))),
+        "timeout_seconds": max(0.2, float(os.getenv(f"{prefix}_TIMEOUT_SECONDS", "1.0"))),
+        "min_speed_hz": float(os.getenv(f"{prefix}_MIN_SPEED_HZ", "0.0")),
+        "max_speed_hz": float(os.getenv(f"{prefix}_MAX_SPEED_HZ", "50.0")),
+        "default_speed_hz": float(os.getenv(f"{prefix}_DEFAULT_SPEED_HZ", "0.0")),
+        "speed_scale": max(1, int(os.getenv(f"{prefix}_SPEED_SCALE", "100"))),
+        # Defaults match common Delta profiles but must be verified against MS300 datasheet.
+        "run_command_register": int(os.getenv(f"{prefix}_RUN_COMMAND_REGISTER", "8192")),
+        "speed_command_register": int(os.getenv(f"{prefix}_SPEED_COMMAND_REGISTER", "8193")),
+        "run_forward_word": int(os.getenv(f"{prefix}_RUN_FORWARD_WORD", "1")),
+        "stop_word": int(os.getenv(f"{prefix}_STOP_WORD", "0")),
+        # Rate limit control writes to avoid burst toggling from UI retries.
+        "min_write_interval_ms": max(50, int(os.getenv(f"{prefix}_MIN_WRITE_INTERVAL_MS", "150"))),
+    }
 
-# Defaults match common Delta profiles but must be verified against MS300 datasheet.
-VFD_RUN_COMMAND_REGISTER = int(os.getenv("VFD_RUN_COMMAND_REGISTER", "8192"))
-VFD_SPEED_COMMAND_REGISTER = int(os.getenv("VFD_SPEED_COMMAND_REGISTER", "8193"))
-VFD_RUN_FORWARD_WORD = int(os.getenv("VFD_RUN_FORWARD_WORD", "1"))
-VFD_STOP_WORD = int(os.getenv("VFD_STOP_WORD", "0"))
 
-# Rate limit control writes to avoid burst toggling from UI retries.
-VFD_MIN_WRITE_INTERVAL_MS = max(50, int(os.getenv("VFD_MIN_WRITE_INTERVAL_MS", "150")))
+VFD_CONFIGS = {
+    "vfd1": _build_vfd_profile("VFD", default_enabled=False),
+    "vfd2": _build_vfd_profile("VFD2", default_enabled=False),
+}
+
+# Backward-compatible aliases (vfd1 remains the default public control target).
+VFD_ENABLED = bool(VFD_CONFIGS["vfd1"]["enabled"])
+VFD_HOST = str(VFD_CONFIGS["vfd1"]["host"])
+VFD_PORT = int(VFD_CONFIGS["vfd1"]["port"])
+VFD_SLAVE_ID = int(VFD_CONFIGS["vfd1"]["slave_id"])
+VFD_TIMEOUT_SECONDS = float(VFD_CONFIGS["vfd1"]["timeout_seconds"])
+VFD_MIN_SPEED_HZ = float(VFD_CONFIGS["vfd1"]["min_speed_hz"])
+VFD_MAX_SPEED_HZ = float(VFD_CONFIGS["vfd1"]["max_speed_hz"])
+VFD_DEFAULT_SPEED_HZ = float(VFD_CONFIGS["vfd1"]["default_speed_hz"])
+VFD_SPEED_SCALE = int(VFD_CONFIGS["vfd1"]["speed_scale"])
+VFD_RUN_COMMAND_REGISTER = int(VFD_CONFIGS["vfd1"]["run_command_register"])
+VFD_SPEED_COMMAND_REGISTER = int(VFD_CONFIGS["vfd1"]["speed_command_register"])
+VFD_RUN_FORWARD_WORD = int(VFD_CONFIGS["vfd1"]["run_forward_word"])
+VFD_STOP_WORD = int(VFD_CONFIGS["vfd1"]["stop_word"])
+VFD_MIN_WRITE_INTERVAL_MS = int(VFD_CONFIGS["vfd1"]["min_write_interval_ms"])
 
 # FastAPI Configuration
 API_HOST = "0.0.0.0"

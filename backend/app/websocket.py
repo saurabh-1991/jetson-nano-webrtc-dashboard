@@ -8,7 +8,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from .camera import check_cuda_availability
 from . import camera as camera_module
 from .gpio_control import get_gpio_controller
-from .vfd_control import get_vfd_controller
+from .vfd_control import get_vfd_controller, get_all_vfd_statuses
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +173,8 @@ def get_device_status() -> dict:
 
     legacy_camera = cameras_status.get("cam1") or next(iter(cameras_status.values()), None)
     gpio = get_gpio_controller()
-    vfd = get_vfd_controller()
+    vfd = get_vfd_controller("vfd1")
+    vfd_statuses = get_all_vfd_statuses()
     cuda_info = check_cuda_availability()
     
     return {
@@ -187,6 +188,7 @@ def get_device_status() -> dict:
         "cameras": cameras_status,
         "gpio": gpio.get_outputs_state(),
         "vfd": vfd.get_status(),
+        "vfds": vfd_statuses,
         "cuda": cuda_info,
         "websocket_connections": get_ws_manager().get_connection_count(),
         "timestamp": None  # Will be set by the API

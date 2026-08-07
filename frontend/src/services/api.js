@@ -182,9 +182,9 @@ export const gpioAPI = {
 
 // VFD endpoints
 export const vfdAPI = {
-  getStatus: () => api.get('/vfd/status'),
-  setRun: (run) => api.post('/vfd/run', { run: !!run }),
-  setSpeed: (speedHz) => api.post('/vfd/speed', { speed_hz: speedHz }),
+  getStatus: (vfdId = 'vfd1') => api.get(`/vfd/status?vfd_id=${encodeURIComponent(vfdId)}`),
+  setRun: (run, vfdId = 'vfd1') => api.post('/vfd/run', { run: !!run, vfd_id: vfdId }),
+  setSpeed: (speedHz, vfdId = 'vfd1') => api.post('/vfd/speed', { speed_hz: speedHz, vfd_id: vfdId }),
 }
 
 // System endpoints

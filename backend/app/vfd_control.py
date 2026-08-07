@@ -6,20 +6,7 @@ import time
 from typing import Any, Dict, Optional
 
 from .config import (
-    VFD_DEFAULT_SPEED_HZ,
-    VFD_ENABLED,
-    VFD_HOST,
-    VFD_MAX_SPEED_HZ,
-    VFD_MIN_SPEED_HZ,
-    VFD_MIN_WRITE_INTERVAL_MS,
-    VFD_PORT,
-    VFD_RUN_COMMAND_REGISTER,
-    VFD_RUN_FORWARD_WORD,
-    VFD_SLAVE_ID,
-    VFD_SPEED_COMMAND_REGISTER,
-    VFD_SPEED_SCALE,
-    VFD_STOP_WORD,
-    VFD_TIMEOUT_SECONDS,
+    VFD_CONFIGS,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,34 +22,40 @@ except Exception:
 class VFDController:
     """Control VFD run/stop and speed setpoint with guarded writes."""
 
-    def __init__(self):
-        self._enabled = bool(VFD_ENABLED)
-        self._host = str(VFD_HOST or "").strip()
-        self._port = int(VFD_PORT)
-        self._slave_id = int(VFD_SLAVE_ID)
-        self._timeout_seconds = float(VFD_TIMEOUT_SECONDS)
+    def __init__(self, vfd_id: str, cfg: Dict[str, Any]):
+        self._vfd_id = str(vfd_id).strip().lower() or "vfd1"
 
-        self._min_speed_hz = float(min(VFD_MIN_SPEED_HZ, VFD_MAX_SPEED_HZ))
-        self._max_speed_hz = float(max(VFD_MIN_SPEED_HZ, VFD_MAX_SPEED_HZ))
-        self._speed_scale = int(VFD_SPEED_SCALE)
+        self._enabled = bool(cfg.get("enabled", False))
+        self._host = str(cfg.get("host") or "").strip()
+        self._port = int(cfg.get("port", 502))
+        self._slave_id = int(cfg.get("slave_id", 1))
+        self._timeout_seconds = float(cfg.get("timeout_seconds", 1.0))
 
-        self._run_register = int(VFD_RUN_COMMAND_REGISTER)
-        self._speed_register = int(VFD_SPEED_COMMAND_REGISTER)
-        self._run_word = int(VFD_RUN_FORWARD_WORD)
-        self._stop_word = int(VFD_STOP_WORD)
+        min_speed_hz = float(cfg.get("min_speed_hz", 0.0))
+        max_speed_hz = float(cfg.get("max_speed_hz", 50.0))
+        self._min_speed_hz = float(min(min_speed_hz, max_speed_hz))
+        self._max_speed_hz = float(max(min_speed_hz, max_speed_hz))
+        self._speed_scale = int(cfg.get("speed_scale", 100))
 
-        self._min_write_interval_seconds = max(0.05, float(VFD_MIN_WRITE_INTERVAL_MS) / 1000.0)
+        self._run_register = int(cfg.get("run_command_register", 8192))
+        self._speed_register = int(cfg.get("speed_command_register", 8193))
+        self._run_word = int(cfg.get("run_forward_word", 1))
+        self._stop_word = int(cfg.get("stop_word", 0))
+
+        min_write_interval_ms = int(cfg.get("min_write_interval_ms", 150))
+        self._min_write_interval_seconds = max(0.05, float(min_write_interval_ms) / 1000.0)
 
         self._state_lock = threading.RLock()
         self._client: Optional[Any] = None
         self._last_write_ts = 0.0
         self._last_error: Optional[str] = None
         self._is_running = False
-        self._speed_hz = float(max(self._min_speed_hz, min(self._max_speed_hz, VFD_DEFAULT_SPEED_HZ)))
+        default_speed_hz = float(cfg.get("default_speed_hz", 0.0))
+        self._speed_hz = float(max(self._min_speed_hz, min(self._max_speed_hz, default_speed_hz)))
 
         if self._enabled and not MODBUS_TCP_AVAILABLE:
             self._last_error = "pymodbus_missing"
-            logger.warning("VFD enabled but pymodbus ModbusTcpClient is unavailable")
+            logger.warning("VFD %s enabled but pymodbus ModbusTcpClient is unavailable", self._vfd_id)
 
     def _config_ready(self) -> bool:
         if not self._enabled:
@@ -92,7 +85,7 @@ class VFDController:
                 return None
         except Exception as exc:
             self._last_error = "modbus_connect_exception"
-            logger.warning("VFD Modbus TCP connect exception: %s", exc)
+            logger.warning("VFD %s Modbus TCP connect exception: %s", self._vfd_id, exc)
             return None
 
         return self._client
@@ -120,7 +113,13 @@ class VFDController:
             return True
         except Exception as exc:
             self._last_error = "modbus_write_exception"
-            logger.warning("VFD write exception register=%s value=%s: %s", register, value, exc)
+            logger.warning(
+                "VFD %s write exception register=%s value=%s: %s",
+                self._vfd_id,
+                register,
+                value,
+                exc,
+            )
             return False
 
     def set_run_state(self, run: bool) -> bool:
@@ -172,12 +171,13 @@ class VFDController:
     def force_stop(self, reason: str = "safety") -> bool:
         """Best-effort stop command used by safety logic."""
         ok = self.set_run_state(False)
-        logger.warning("VFD force_stop reason=%s success=%s", reason, ok)
+        logger.warning("VFD %s force_stop reason=%s success=%s", self._vfd_id, reason, ok)
         return ok
 
     def get_status(self) -> Dict[str, Any]:
         with self._state_lock:
             return {
+                "vfd_id": self._vfd_id,
                 "enabled": bool(self._enabled),
                 "library_available": bool(MODBUS_TCP_AVAILABLE),
                 "host_configured": bool(self._host),
@@ -204,11 +204,69 @@ class VFDController:
                 self._client = None
 
 
+DEFAULT_VFD_ID = "vfd1"
 vfd_controller = None
+vfd_controllers: Dict[str, VFDController] = {}
+_vfd_registry_lock = threading.RLock()
 
 
-def get_vfd_controller() -> VFDController:
+def _normalize_vfd_id(vfd_id: Optional[str]) -> str:
+    normalized = str(vfd_id or DEFAULT_VFD_ID).strip().lower()
+    return normalized or DEFAULT_VFD_ID
+
+
+def get_available_vfd_ids() -> list:
+    return list(VFD_CONFIGS.keys())
+
+
+def get_vfd_controller(vfd_id: str = DEFAULT_VFD_ID) -> VFDController:
     global vfd_controller
-    if vfd_controller is None:
-        vfd_controller = VFDController()
-    return vfd_controller
+
+    normalized_id = _normalize_vfd_id(vfd_id)
+    if normalized_id not in VFD_CONFIGS:
+        raise ValueError(f"unknown_vfd_id:{normalized_id}")
+
+    with _vfd_registry_lock:
+        controller = vfd_controllers.get(normalized_id)
+        if controller is None:
+            controller = VFDController(normalized_id, VFD_CONFIGS[normalized_id])
+            vfd_controllers[normalized_id] = controller
+
+        # Backward compatibility for modules that still reference vfd_controller singleton.
+        if normalized_id == DEFAULT_VFD_ID:
+            vfd_controller = controller
+
+        return controller
+
+
+def get_all_vfd_statuses() -> Dict[str, Dict[str, Any]]:
+    statuses: Dict[str, Dict[str, Any]] = {}
+    for vfd_id in get_available_vfd_ids():
+        controller = get_vfd_controller(vfd_id)
+        statuses[vfd_id] = controller.get_status()
+    return statuses
+
+
+def force_stop_all_vfds(reason: str = "safety") -> Dict[str, bool]:
+    results: Dict[str, bool] = {}
+    for vfd_id in get_available_vfd_ids():
+        controller = get_vfd_controller(vfd_id)
+        status = controller.get_status()
+        was_running = bool(status.get("is_running"))
+        if was_running:
+            results[vfd_id] = bool(controller.force_stop(reason=reason))
+        else:
+            results[vfd_id] = True
+    return results
+
+
+def cleanup_all_vfds():
+    global vfd_controller
+    with _vfd_registry_lock:
+        for controller in vfd_controllers.values():
+            try:
+                controller.cleanup()
+            except Exception:
+                pass
+        vfd_controllers.clear()
+        vfd_controller = None

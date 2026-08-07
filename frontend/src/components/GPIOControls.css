@@ -20,6 +20,12 @@
   gap: 0.65rem;
 }
 
+.vfd-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
 .vfd-card {
   display: flex;
   flex-direction: column;
@@ -218,6 +224,10 @@
   .vfd-header-row {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .vfd-grid {
+    grid-template-columns: 1fr;
   }
 
   .vfd-speed-input-row {

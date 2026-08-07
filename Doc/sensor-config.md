@@ -295,3 +295,41 @@ For normal field retuning (IP, slave ID, register addresses, scale, decimal), on
 
 `./scripts/run_backend_with_nvidia_runtime.sh`
 
+## 10. Dual VFD setup (VFD #1 and VFD #2)
+
+Backend now supports two independent VFD profiles.
+
+Set in `docker-compose.yml`:
+
+```yaml
+VFD_ENABLED=true
+VFD_HOST=<VFD1_IP>
+VFD_PORT=502
+VFD_SLAVE_ID=1
+
+VFD2_ENABLED=true
+VFD2_HOST=<VFD2_IP>
+VFD2_PORT=502
+VFD2_SLAVE_ID=1
+```
+
+Other per-drive register/speed fields are also available for both profiles (`VFD_*` and `VFD2_*`).
+
+API usage:
+
+1) Status for VFD1:
+
+`curl -s "http://127.0.0.1:8000/api/vfd/status?vfd_id=vfd1"`
+
+2) Status for VFD2:
+
+`curl -s "http://127.0.0.1:8000/api/vfd/status?vfd_id=vfd2"`
+
+3) Run VFD2:
+
+`curl -s -X POST http://127.0.0.1:8000/api/vfd/run -H "Content-Type: application/json" -d '{"vfd_id":"vfd2","run":true}'`
+
+4) Set VFD2 speed:
+
+`curl -s -X POST http://127.0.0.1:8000/api/vfd/speed -H "Content-Type: application/json" -d '{"vfd_id":"vfd2","speed_hz":25.0}'`
+
