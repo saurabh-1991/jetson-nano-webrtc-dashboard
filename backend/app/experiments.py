@@ -276,7 +276,9 @@ class ExperimentManager:
             except Exception:
                 ok, frame = False, None
 
+            did_direct_pull = False
             if (not ok or frame is None) and (loop_ts - last_direct_pull_ts) >= float(EXPERIMENTS_VIDEO_DIRECT_PULL_INTERVAL_SECONDS):
+                did_direct_pull = True
                 try:
                     ok, frame = camera.get_frame()
                     last_direct_pull_ts = loop_ts
@@ -286,23 +288,30 @@ class ExperimentManager:
                     ok, frame = False, None
 
             if not ok or frame is None:
-                consecutive_no_frame += 1
+                # Only count genuine failed reads (actual direct pulls) toward the
+                # rebind threshold. A cache miss that's simply waiting for the next
+                # scheduled direct-pull window is normal and must not be treated as
+                # a camera failure - otherwise the threshold is reached in well under
+                # a second and the shared camera gets needlessly cycled every few
+                # seconds, disrupting any concurrent live viewers.
+                if did_direct_pull:
+                    consecutive_no_frame += 1
 
-                if consecutive_no_frame >= rebind_threshold and (loop_ts - last_rebind_attempt_ts) >= rebind_cooldown:
-                    last_rebind_attempt_ts = loop_ts
-                    if stats is not None:
-                        stats["producer_rebind_attempts"] = int(stats.get("producer_rebind_attempts", 0)) + 1
-                    try:
-                        camera = try_rebind_camera(camera_id, reason="experiment_video_producer_starved")
-                        logger.warning(
-                            "Video producer rebind attempted for %s after %s consecutive empty frames",
-                            camera_id,
-                            consecutive_no_frame,
-                        )
-                    except Exception as rebind_err:
+                    if consecutive_no_frame >= rebind_threshold and (loop_ts - last_rebind_attempt_ts) >= rebind_cooldown:
+                        last_rebind_attempt_ts = loop_ts
                         if stats is not None:
-                            stats["producer_rebind_failures"] = int(stats.get("producer_rebind_failures", 0)) + 1
-                        logger.warning("Video producer rebind failed for %s: %s", camera_id, rebind_err)
+                            stats["producer_rebind_attempts"] = int(stats.get("producer_rebind_attempts", 0)) + 1
+                        try:
+                            camera = try_rebind_camera(camera_id, reason="experiment_video_producer_starved")
+                            logger.warning(
+                                "Video producer rebind attempted for %s after %s consecutive failed direct pulls",
+                                camera_id,
+                                consecutive_no_frame,
+                            )
+                        except Exception as rebind_err:
+                            if stats is not None:
+                                stats["producer_rebind_failures"] = int(stats.get("producer_rebind_failures", 0)) + 1
+                            logger.warning("Video producer rebind failed for %s: %s", camera_id, rebind_err)
 
                 stop_event.wait(producer_poll_seconds)
                 continue

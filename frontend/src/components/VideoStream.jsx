@@ -107,6 +107,102 @@ const markH264Success = (cameraId) => {
   clearStoredH264Cooldown(key)
 }
 
+// WebRTC (gateway + backend) failure cooldown, mirroring the H.264 cooldown above,
+// so a camera that consistently can't establish WebRTC skips straight to MJPEG
+// on subsequent connect attempts instead of re-incurring the full negotiation delay.
+const WEBRTC_COOLDOWN_STORAGE_PREFIX = 'jetson_webrtc_cooldown_v1_'
+const webrtcFailureStateByCamera = new Map()
+
+const readStoredWebrtcCooldown = (cameraId) => {
+  if (typeof window === 'undefined') {
+    return null
+  }
+  try {
+    const raw = window.localStorage.getItem(`${WEBRTC_COOLDOWN_STORAGE_PREFIX}${cameraId}`)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed.cooldownUntilTs !== 'number') {
+      return null
+    }
+    return parsed
+  } catch (_e) {
+    return null
+  }
+}
+
+const writeStoredWebrtcCooldown = (cameraId, state) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    window.localStorage.setItem(`${WEBRTC_COOLDOWN_STORAGE_PREFIX}${cameraId}`, JSON.stringify(state))
+  } catch (_e) {
+    // no-op
+  }
+}
+
+const clearStoredWebrtcCooldown = (cameraId) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    window.localStorage.removeItem(`${WEBRTC_COOLDOWN_STORAGE_PREFIX}${cameraId}`)
+  } catch (_e) {
+    // no-op
+  }
+}
+
+const getWebrtcFailureState = (cameraId) => {
+  const key = String(cameraId || '').toLowerCase()
+  if (!key) {
+    return { failures: 0, cooldownUntilTs: 0, reason: '' }
+  }
+
+  const current = webrtcFailureStateByCamera.get(key)
+  if (current) {
+    return current
+  }
+
+  const restored = readStoredWebrtcCooldown(key)
+  const state = {
+    failures: Number(restored?.failures || 0),
+    cooldownUntilTs: Number(restored?.cooldownUntilTs || 0),
+    reason: String(restored?.reason || ''),
+  }
+  webrtcFailureStateByCamera.set(key, state)
+  return state
+}
+
+const getWebrtcCooldownRemainingMs = (cameraId) => {
+  const state = getWebrtcFailureState(cameraId)
+  return Math.max(0, Number(state.cooldownUntilTs || 0) - Date.now())
+}
+
+const markWebrtcFailure = (cameraId, options = {}) => {
+  const key = String(cameraId || '').toLowerCase()
+  if (!key) return
+
+  const state = getWebrtcFailureState(key)
+  const baseMs = Math.max(5000, Number(options.baseMs || 30000))
+  const maxMs = Math.max(baseMs, Number(options.maxMs || 180000))
+
+  state.failures = Number(state.failures || 0) + 1
+  const multiplier = Math.pow(2, Math.max(0, state.failures - 1))
+  state.cooldownUntilTs = Date.now() + Math.min(maxMs, Math.round(baseMs * multiplier))
+  state.reason = String(options.reason || 'webrtc_failed')
+
+  webrtcFailureStateByCamera.set(key, state)
+  writeStoredWebrtcCooldown(key, state)
+}
+
+const markWebrtcSuccess = (cameraId) => {
+  const key = String(cameraId || '').toLowerCase()
+  if (!key) return
+
+  webrtcFailureStateByCamera.set(key, { failures: 0, cooldownUntilTs: 0, reason: '' })
+  clearStoredWebrtcCooldown(key)
+}
+
 const probeH264DecodeCapabilities = async () => {
   try {
     if (typeof window === 'undefined') {
@@ -312,7 +408,7 @@ export const VideoStream = ({
     const controller = new AbortController()
     const timeout = setTimeout(() => {
       try { controller.abort() } catch (_e) {}
-    }, 5000)
+    }, 3500)
 
     let response
     try {
@@ -383,7 +479,7 @@ export const VideoStream = ({
       }
 
       pc.addEventListener('connectionstatechange', onConnectionStateChange)
-      const timer = setTimeout(() => fail('Gateway WebRTC connection timeout'), 7000)
+      const timer = setTimeout(() => fail('Gateway WebRTC connection timeout'), 4500)
     })
 
     setIsConnected(true)
@@ -601,7 +697,7 @@ export const VideoStream = ({
 
       const timeout = setTimeout(() => {
         fail()
-      }, 5000)
+      }, 3500)
 
       videoEl.addEventListener('playing', onPlaying)
       videoEl.addEventListener('canplay', onCanPlay)
@@ -690,12 +786,25 @@ export const VideoStream = ({
         setNotice(`H.264 temporarily cooled down for ${cameraId}. Retrying in ~${retrySeconds}s; using fallback path now.`)
       }
 
+      const webrtcCooldownMs = getWebrtcCooldownRemainingMs(cameraId)
+      if (webrtcCooldownMs > 0) {
+        const retrySeconds = Math.max(1, Math.ceil(webrtcCooldownMs / 1000))
+        await bestEffortPrewarmCamera(baseUrl)
+        usedMjpegFallback = true
+        startMJPEGFallback(
+          baseUrl,
+          `WebRTC temporarily cooled down for ${cameraId} (retry in ~${retrySeconds}s). Using MJPEG mode.`
+        )
+        return
+      }
+
       const gatewayEnabled = Boolean(cameraInfoData?.media_gateway?.enabled)
       const gatewayWhepUrl = (cameraInfoData?.media_gateway?.whep_url || '').trim()
       if (gatewayEnabled && gatewayWhepUrl) {
         try {
           const gatewayConnected = await tryStartGatewayWebRTC(gatewayWhepUrl)
           if (gatewayConnected) {
+            markWebrtcSuccess(cameraId)
             return
           }
         } catch (gatewayErr) {
@@ -763,7 +872,7 @@ export const VideoStream = ({
         } catch (_e) {
           // no-op
         }
-      }, 4500)
+      }, 3500)
 
       let response
       try {
@@ -797,10 +906,50 @@ export const VideoStream = ({
       const answer = await response.json()
       await pc.setRemoteDescription(new RTCSessionDescription(answer))
 
+      // Guard against ICE/DTLS negotiation stalling silently, which previously left
+      // the <video> element permanently black with no fallback ever triggered.
+      await new Promise((resolve, reject) => {
+        if (pc.connectionState === 'connected') {
+          resolve(true)
+          return
+        }
+
+        let done = false
+
+        const cleanup = () => {
+          clearTimeout(timer)
+          pc.removeEventListener('connectionstatechange', onEstablishStateChange)
+        }
+
+        const onEstablishStateChange = () => {
+          if (done) return
+          if (pc.connectionState === 'connected') {
+            done = true
+            cleanup()
+            resolve(true)
+          } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+            done = true
+            cleanup()
+            reject(new Error(`Backend WebRTC ${pc.connectionState}`))
+          }
+        }
+
+        pc.addEventListener('connectionstatechange', onEstablishStateChange)
+        const timer = setTimeout(() => {
+          if (done) return
+          done = true
+          cleanup()
+          reject(new Error('Backend WebRTC connection timeout'))
+        }, 6000)
+      })
+
+      markWebrtcSuccess(cameraId)
       setIsConnected(true)
       setConnectionState('connected')
     } catch (err) {
       console.error('WebRTC connection error:', err)
+
+      markWebrtcFailure(cameraId, { reason: err?.message || 'webrtc_failed' })
 
       // Auto-fallback to MJPEG for runtime streaming continuity
       const fallbackReason = `WebRTC failed (${err.message || 'unknown error'}). Switched to MJPEG.`

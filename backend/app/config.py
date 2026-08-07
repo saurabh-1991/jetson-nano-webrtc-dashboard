@@ -581,8 +581,10 @@ EXPERIMENTS_VIDEO_PRODUCER_POLL_SECONDS = max(
     float(os.getenv("EXPERIMENTS_VIDEO_PRODUCER_POLL_SECONDS", "0.008")),
 )
 EXPERIMENTS_VIDEO_PRODUCER_REBIND_THRESHOLD = max(
-    4,
-    int(os.getenv("EXPERIMENTS_VIDEO_PRODUCER_REBIND_THRESHOLD", "16")),
+    3,
+    # Counts genuine failed direct pulls only (spaced ~EXPERIMENTS_VIDEO_DIRECT_PULL_INTERVAL_SECONDS
+    # apart), so 5 * 0.75s ~= 3.75s of real camera unresponsiveness before rebinding.
+    int(os.getenv("EXPERIMENTS_VIDEO_PRODUCER_REBIND_THRESHOLD", "5")),
 )
 EXPERIMENTS_VIDEO_PRODUCER_REBIND_COOLDOWN_SECONDS = max(
     0.5,
