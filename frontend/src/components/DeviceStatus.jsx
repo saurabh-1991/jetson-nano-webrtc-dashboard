@@ -344,10 +344,14 @@ export const DeviceStatus = () => {
             <div className="card-title">Input Signals</div>
             <div className="card-content">
               {Object.entries(status.gpio.inputs).map(([key, input]) => {
-                const signalOn = !!input?.signal
                 const pin = input?.pin
                 const rawLevel = input?.raw_gpio_level
                 const activeLow = !!input?.active_low
+                const rawHigh = rawLevel === 'HIGH'
+                const rawLow = rawLevel === 'LOW'
+                const signalOn = rawHigh || rawLow
+                  ? (activeLow ? rawLow : rawHigh)
+                  : !!input?.signal
                 const behaviorText = activeLow ? 'Active LOW · Default HIGH' : 'Active HIGH · Default LOW'
                 return (
                   <div className="status-item" key={key}>
