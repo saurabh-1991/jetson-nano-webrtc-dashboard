@@ -12,6 +12,8 @@ from .config import (
     CAMERA_WIDTH,
     CAMERA_HEIGHT,
     CAMERA_FPS,
+    CAMERA_DEFAULT_ID,
+    CAMERA_PROFILES,
 )
 
 logger = logging.getLogger(__name__)
@@ -278,14 +280,91 @@ class CameraCapture:
 
 # Global camera instance
 camera = None
+camera_registry = {}
 
 
-def get_camera() -> CameraCapture:
-    """Get or create camera instance"""
+def _normalize_camera_id(camera_id: str = None) -> str:
+    candidate = str(camera_id or CAMERA_DEFAULT_ID or "cam1").strip().lower()
+    if candidate in CAMERA_PROFILES:
+        return candidate
+    if CAMERA_PROFILES:
+        return list(CAMERA_PROFILES.keys())[0]
+    return "cam1"
+
+
+def get_camera(camera_id: str = None, create_if_missing: bool = True) -> CameraCapture:
+    """Get or create camera instance by camera ID.
+
+    This compatibility layer keeps legacy single-camera behavior while exposing
+    the multi-camera function signature used by the API layer.
+    """
     global camera
-    if camera is None:
-        camera = CameraCapture()
-    return camera
+    normalized_id = _normalize_camera_id(camera_id)
+    existing = camera_registry.get(normalized_id)
+    if existing is not None:
+        return existing
+
+    if not create_if_missing:
+        return None
+
+    cam = CameraCapture()
+    camera_registry[normalized_id] = cam
+    if normalized_id == _normalize_camera_id(CAMERA_DEFAULT_ID):
+        camera = cam
+    return cam
+
+
+def get_camera_ids() -> list:
+    """Return enabled camera IDs from configuration."""
+    if CAMERA_PROFILES:
+        return list(CAMERA_PROFILES.keys())
+    return [_normalize_camera_id(CAMERA_DEFAULT_ID)]
+
+
+def release_camera(camera_id: str = None) -> None:
+    """Release one camera instance by ID."""
+    global camera
+    normalized_id = _normalize_camera_id(camera_id)
+    cam = camera_registry.pop(normalized_id, None)
+    if cam is not None:
+        try:
+            cam.release()
+        except Exception:
+            pass
+
+    if normalized_id == _normalize_camera_id(CAMERA_DEFAULT_ID):
+        camera = None
+
+
+def release_all_cameras() -> None:
+    """Release all camera instances."""
+    global camera
+    for cam in list(camera_registry.values()):
+        try:
+            cam.release()
+        except Exception:
+            pass
+    camera_registry.clear()
+    camera = None
+
+
+def try_rebind_camera(camera_id: str = None, reason: str = "manual") -> CameraCapture:
+    """Best-effort camera rebind helper."""
+    normalized_id = _normalize_camera_id(camera_id)
+    logger.warning("Rebinding camera %s reason=%s", normalized_id, reason)
+    release_camera(normalized_id)
+    return get_camera(normalized_id, create_if_missing=True)
+
+
+def probe_camera_devices_gstreamer() -> dict:
+    """Return lightweight probe information for API diagnostics."""
+    return {
+        "gstreamer_probe": {
+            "pipeline": GST_PIPELINE,
+            "camera_device": CAMERA_DEVICE,
+            "camera_ids": get_camera_ids(),
+        }
+    }
 
 
 def check_cuda_availability() -> dict:
