@@ -120,14 +120,14 @@ class CameraCapture:
     def _initialize_camera(self):
         """Initialize camera capture"""
         try:
-            fallback_sources = []
+            fallback_sources = [
+                (self.camera_device, None, "V4L2 device (direct)"),
+                (self._build_usb_raw_pipeline(), cv2.CAP_GSTREAMER, "USB raw GStreamer pipeline"),
+            ]
+
+            # Keep legacy configured pipeline as a late fallback for cam1/default path.
             if self.camera_id == _normalize_camera_id(CAMERA_DEFAULT_ID):
                 fallback_sources.append((GST_PIPELINE, cv2.CAP_GSTREAMER, "configured GStreamer pipeline"))
-
-            fallback_sources.extend([
-                (self._build_usb_raw_pipeline(), cv2.CAP_GSTREAMER, "USB raw GStreamer pipeline"),
-                (self.camera_device, None, "V4L2 device (direct)"),
-            ])
 
             tried_sources = set()
             for source, backend, label in fallback_sources:
