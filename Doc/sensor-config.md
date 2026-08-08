@@ -34,12 +34,28 @@ Do not edit Python files for routine address updates.
 
 ## 3. Required compose changes for Ethernet gateway (no TTYUSB)
 
+From your live device page (`http://192.168.0.200/ip_en.html`), current values are:
+
+- Device IP: `192.168.0.200`
+- Work Mode: `TCP Server`
+- Device Port: `4196`
+- Serial: `115200, 8, None, 1`
+- Protocol: `None`
+
+Important compatibility note:
+
+- Backend in this project uses Modbus TCP client framing.
+- For this converter, set Protocol to `Modbus TCP to RTU` so the gateway converts network Modbus TCP to RS485 Modbus RTU.
+- In converter UI, when protocol is changed to Modbus TCP to RTU, device port is expected to switch to `502`.
+
+If protocol remains `None` (transparent mode), backend Modbus TCP reads can fail even when ping/port checks pass.
+
 In `docker-compose.yml`, set backend env like this:
 
 ```yaml
 MODBUS_ENABLED=true
 MODBUS_TRANSPORT=tcp
-MODBUS_HOST=<WAVESHARE_IP>
+MODBUS_HOST=192.168.0.200
 MODBUS_TCP_PORT=502
 MODBUS_SLAVE_ID=1
 
@@ -54,6 +70,7 @@ MODBUS_STOPBITS=1
 Important:
 
 - When `MODBUS_TRANSPORT=tcp`, the code uses host/port and does not require TTYUSB for the datalogger path.
+- Keep `MODBUS_TCP_PORT=502` after enabling Modbus TCP to RTU in converter protocol settings.
 
 ## 4. Temperature register mapping (3 sensors from data logger)
 
@@ -102,10 +119,14 @@ Two common field patterns are supported.
 
 ### Pattern A: flow is read from same Waveshare endpoint (recommended for your topology)
 
+For your current field setup, Waveshare static IP is:
+
+`192.168.0.200`
+
 ```yaml
 FLOW_METER_ENABLED=true
 FLOW_METER_TRANSPORT=tcp
-FLOW_METER_HOST=<WAVESHARE_IP>
+FLOW_METER_HOST=192.168.0.200
 FLOW_METER_TCP_PORT=502
 FLOW_METER_SLAVE_ID=1
 
@@ -285,9 +306,9 @@ For normal field retuning (IP, slave ID, register addresses, scale, decimal), on
 
 5) Confirm gateway reachability from Jetson:
 
-`ping -c 3 <WAVESHARE_IP>`
+`ping -c 3 192.168.0.200`
 
-`nc -vz <WAVESHARE_IP> 502`
+`nc -vz 192.168.0.200 502`
 
 6) If backend failed after recreate, recover quickly:
 

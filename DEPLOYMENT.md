@@ -108,10 +108,19 @@ Edit backend environment values in `docker-compose.yml`.
 
 ### 5.1 Datalogger via Waveshare (no USB-TTL converter)
 
+Before backend restart, verify converter web page at `http://192.168.0.200/ip_en.html`:
+
+- Work Mode: `TCP Server`
+- Protocol: `Modbus TCP to RTU`
+- Device Port: `502` (auto-adjusts when protocol conversion is enabled)
+- Serial must match your logger RS485 settings (baud/databits/parity/stopbits)
+
+If Protocol is `None` and Device Port is `4196`, backend Modbus TCP polling may return unavailable data.
+
 Required baseline:
 
 - `MODBUS_TRANSPORT=tcp`
-- `MODBUS_HOST=<WAVESHARE_OR_DATALOGGER_GATEWAY_IP>`
+- `MODBUS_HOST=192.168.0.200` (your current Waveshare static IP)
 - `MODBUS_TCP_PORT=502`
 - `MODBUS_SLAVE_ID=<LOGGER_SLAVE_ID>`
 
@@ -119,7 +128,7 @@ Required baseline:
 
 - `FLOW_METER_ENABLED=true`
 - `FLOW_METER_TRANSPORT=tcp`
-- `FLOW_METER_HOST=<FLOW_GATEWAY_IP_OR_SAME_WAVESHARE_IP>`
+- `FLOW_METER_HOST=192.168.0.200` (same gateway in current setup)
 - `FLOW_METER_TCP_PORT=502`
 - `FLOW_METER_SLAVE_ID=<FLOW_SLAVE_ID>`
 - `FLOW_METER_VALUE_ADDRESS=<REGISTER>`

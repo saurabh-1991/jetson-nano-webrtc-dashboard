@@ -60,7 +60,7 @@ services:
       - MODBUS_ENABLED=true
       - MODBUS_TRANSPORT=tcp
       - MODBUS_PORT=/dev/ttyUSB0
-      - MODBUS_HOST=
+      - MODBUS_HOST=192.168.0.200
       - MODBUS_TCP_PORT=502
       - MODBUS_SLAVE_ID=1
       - MODBUS_BAUDRATE=9600
@@ -73,7 +73,7 @@ services:
       - MODBUS_ADDRESS_OFFSET=0
       - FLOW_METER_ENABLED=true
       - FLOW_METER_TRANSPORT=tcp
-      - FLOW_METER_HOST=
+      - FLOW_METER_HOST=192.168.0.200
       - FLOW_METER_TCP_PORT=502
       - FLOW_METER_SLAVE_ID=1
       - FLOW_METER_TIMEOUT=0.8
