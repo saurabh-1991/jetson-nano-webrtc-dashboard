@@ -26,6 +26,13 @@ class CameraCapture:
         self.cap = None
         self.is_open = False
         self.frame_count = 0
+        self.opened_at_ts = time.time()
+        self.last_frame_ts = 0.0
+        self.last_success_ts = 0.0
+        self.last_error = None
+        self._last_frame = None
+        self.selected_pipeline = None
+        self.selected_pipeline_mode = None
         self.cuda_enabled = False
         self.cuda_available = False
         self.cuda_device_count = 0
@@ -124,14 +131,18 @@ class CameraCapture:
                 if cap is not None:
                     self.cap = cap
                     self.is_open = True
+                    self.selected_pipeline = str(source)
+                    self.selected_pipeline_mode = label
                     logger.info("Camera initialized successfully")
                     return
 
             logger.error("Failed to initialize camera")
+            self.last_error = "camera_init_failed"
 
         except Exception as e:
             logger.error(f"Error initializing camera: {e}")
             self.is_open = False
+            self.last_error = str(e)
 
     def _build_usb_raw_pipeline(self) -> str:
         """Build a tolerant USB camera GStreamer pipeline (non-MJPEG-specific)."""
@@ -202,9 +213,13 @@ class CameraCapture:
 
             if not ret or frame is None:
                 logger.warning("Failed to read frame from camera")
+                self.last_error = "frame_read_failed"
                 return False, None
 
             self.frame_count += 1
+            self.last_frame_ts = time.time()
+            self.last_success_ts = self.last_frame_ts
+            self._last_frame = frame
 
             # Process frame using CUDA if available
             if self.cuda_enabled:
@@ -221,7 +236,72 @@ class CameraCapture:
 
         except Exception as e:
             logger.error(f"Error getting frame: {e}")
+            self.last_error = str(e)
             return False, None
+
+    def get_cached_frame(self, max_age_seconds: float = 0.5) -> tuple:
+        """Return a recent frame if available, otherwise capture a fresh frame."""
+        now_ts = time.time()
+        if self._last_frame is not None and (now_ts - self.last_frame_ts) <= float(max_age_seconds):
+            return True, self._last_frame.copy()
+        return self.get_frame()
+
+    def get_jpeg_frame(self, quality: int = 80) -> tuple:
+        """Capture frame and return JPEG bytes for HTTP streaming."""
+        success, frame = self.get_cached_frame(max_age_seconds=0.25)
+        if not success or frame is None:
+            return False, None
+
+        try:
+            q = max(20, min(95, int(quality)))
+            ok, encoded = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), q])
+            if not ok or encoded is None:
+                self.last_error = "jpeg_encode_failed"
+                return False, None
+            return True, encoded.tobytes()
+        except Exception as e:
+            self.last_error = str(e)
+            return False, None
+
+    def maybe_release_if_idle(self, idle_seconds: int = 6, active_mjpeg_clients: int = 0, webrtc_connections: int = 0) -> bool:
+        """Release camera when idle and there are no active viewers."""
+        if not self.is_open or self.cap is None:
+            return False
+
+        if int(active_mjpeg_clients) > 0 or int(webrtc_connections) > 0:
+            return False
+
+        now_ts = time.time()
+        last_activity_ts = self.last_frame_ts or self.last_success_ts or self.opened_at_ts
+        if (now_ts - float(last_activity_ts)) < float(idle_seconds):
+            return False
+
+        logger.info("Releasing idle camera after %.2fs without viewers", now_ts - float(last_activity_ts))
+        self.release()
+        return True
+
+    def get_runtime_diagnostics(self) -> dict:
+        """Return runtime diagnostics used by API responses."""
+        return {
+            "selected_pipeline": self.selected_pipeline,
+            "selected_pipeline_mode": self.selected_pipeline_mode,
+            "is_open": bool(self.is_open),
+            "frame_count": int(self.frame_count),
+            "last_frame_ts": float(self.last_frame_ts),
+            "last_error": self.last_error,
+        }
+
+    def get_performance_stats(self) -> dict:
+        """Return lightweight camera performance metrics."""
+        uptime_seconds = max(0.001, time.time() - float(self.opened_at_ts))
+        approx_fps = float(self.frame_count) / uptime_seconds
+        return {
+            "uptime_seconds": round(uptime_seconds, 3),
+            "frame_count": int(self.frame_count),
+            "approx_fps": round(approx_fps, 2),
+            "cuda_enabled": bool(self.cuda_enabled),
+            "is_open": bool(self.is_open),
+        }
 
     def _process_with_cuda(self, frame) -> np.ndarray:
         """
@@ -269,6 +349,8 @@ class CameraCapture:
             if self.cap is not None:
                 self.cap.release()
                 self.is_open = False
+                self.selected_pipeline = None
+                self.selected_pipeline_mode = None
                 logger.info("Camera released")
         except Exception as e:
             logger.error(f"Error releasing camera: {e}")
