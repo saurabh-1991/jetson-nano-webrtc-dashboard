@@ -22,7 +22,13 @@ logger = logging.getLogger(__name__)
 class CameraCapture:
     """Capture video from camera using GStreamer and OpenCV"""
 
-    def __init__(self):
+    def __init__(self, camera_id: str = None):
+        self.camera_id = _normalize_camera_id(camera_id)
+        profile = CAMERA_PROFILES.get(self.camera_id, {})
+        self.camera_device = str(profile.get("device") or CAMERA_DEVICE)
+        self.camera_width = int(profile.get("width") or CAMERA_WIDTH)
+        self.camera_height = int(profile.get("height") or CAMERA_HEIGHT)
+        self.camera_fps = int(profile.get("fps") or CAMERA_FPS)
         self.cap = None
         self.is_open = False
         self.frame_count = 0
@@ -114,11 +120,14 @@ class CameraCapture:
     def _initialize_camera(self):
         """Initialize camera capture"""
         try:
-            fallback_sources = [
-                (GST_PIPELINE, cv2.CAP_GSTREAMER, "configured GStreamer pipeline"),
+            fallback_sources = []
+            if self.camera_id == _normalize_camera_id(CAMERA_DEFAULT_ID):
+                fallback_sources.append((GST_PIPELINE, cv2.CAP_GSTREAMER, "configured GStreamer pipeline"))
+
+            fallback_sources.extend([
                 (self._build_usb_raw_pipeline(), cv2.CAP_GSTREAMER, "USB raw GStreamer pipeline"),
-                (CAMERA_DEVICE, None, "V4L2 device (direct)"),
-            ]
+                (self.camera_device, None, "V4L2 device (direct)"),
+            ])
 
             tried_sources = set()
             for source, backend, label in fallback_sources:
@@ -133,10 +142,14 @@ class CameraCapture:
                     self.is_open = True
                     self.selected_pipeline = str(source)
                     self.selected_pipeline_mode = label
-                    logger.info("Camera initialized successfully")
+                    logger.info(
+                        "Camera initialized successfully: id=%s device=%s",
+                        self.camera_id,
+                        self.camera_device,
+                    )
                     return
 
-            logger.error("Failed to initialize camera")
+            logger.error("Failed to initialize camera: id=%s device=%s", self.camera_id, self.camera_device)
             self.last_error = "camera_init_failed"
 
         except Exception as e:
@@ -153,10 +166,10 @@ class CameraCapture:
             "video/x-raw, format=BGR ! "
             "appsink drop=1 max-buffers=1 sync=false"
         ).format(
-            device=CAMERA_DEVICE,
-            width=CAMERA_WIDTH,
-            height=CAMERA_HEIGHT,
-            fps=CAMERA_FPS,
+            device=self.camera_device,
+            width=self.camera_width,
+            height=self.camera_height,
+            fps=self.camera_fps,
         )
 
     def _open_capture(self, source, backend, label):
@@ -389,7 +402,7 @@ def get_camera(camera_id: str = None, create_if_missing: bool = True) -> CameraC
     if not create_if_missing:
         return None
 
-    cam = CameraCapture()
+    cam = CameraCapture(normalized_id)
     camera_registry[normalized_id] = cam
     if normalized_id == _normalize_camera_id(CAMERA_DEFAULT_ID):
         camera = cam
