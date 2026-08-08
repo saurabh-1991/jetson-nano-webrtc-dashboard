@@ -297,11 +297,20 @@ class CameraCapture:
         """Return runtime diagnostics used by API responses."""
         return {
             "selected_pipeline": self.selected_pipeline,
+            "selected_pipeline_source": self.selected_pipeline,
             "selected_pipeline_mode": self.selected_pipeline_mode,
             "is_open": bool(self.is_open),
             "frame_count": int(self.frame_count),
             "last_frame_ts": float(self.last_frame_ts),
             "last_error": self.last_error,
+            "recovery": {
+                "attempts": 0,
+                "successes": 0,
+                "failures": 0,
+                "consecutive_failures": 0,
+                "next_recovery_allowed_in_seconds": 0.0,
+                "last_recovery_reason": None,
+            },
         }
 
     def get_performance_stats(self) -> dict:
@@ -407,6 +416,12 @@ def get_camera(camera_id: str = None, create_if_missing: bool = True) -> CameraC
     if normalized_id == _normalize_camera_id(CAMERA_DEFAULT_ID):
         camera = cam
     return cam
+
+
+def get_existing_camera(camera_id: str = None) -> CameraCapture:
+    """Compatibility helper: return camera instance only if already created."""
+    normalized_id = _normalize_camera_id(camera_id)
+    return camera_registry.get(normalized_id)
 
 
 def get_camera_ids() -> list:
