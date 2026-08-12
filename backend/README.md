@@ -137,8 +137,10 @@ Key settings:
 - `VFD_HOST`, `VFD_PORT`, `VFD_SLAVE_ID`, `VFD_TIMEOUT_SECONDS`
 - `VFD_MIN_SPEED_HZ`, `VFD_MAX_SPEED_HZ`, `VFD_DEFAULT_SPEED_HZ`
 - `VFD_SPEED_SCALE` — register scaling factor (`100` means 0.01 Hz units)
-- `VFD_RUN_COMMAND_REGISTER`, `VFD_SPEED_COMMAND_REGISTER`
-- `VFD_RUN_FORWARD_WORD`, `VFD_STOP_WORD`
+- `VFD_ADDRESS_BASE`, `VFD_ADDRESS_OFFSET` — optional logical-address normalization (for example `400001` style maps)
+- `VFD_RUN_COMMAND_REGISTER`, `VFD_SPEED_COMMAND_REGISTER` (MS300 defaults: `0x2000` and `0x2001`)
+- `VFD_RUN_FORWARD_WORD`, `VFD_STOP_WORD` (MS300 defaults: `0x0012` forward run, `0x0001` stop)
+- mirror all VFD settings for secondary drive with `VFD2_*`
 - `VFD_MIN_WRITE_INTERVAL_MS` — minimum delay between control writes
 - `MODBUS_TRANSPORT` — `serial` (default) or `tcp` for RTU-to-Ethernet gateways
 - `MODBUS_HOST`, `MODBUS_TCP_PORT` — gateway endpoint when `MODBUS_TRANSPORT=tcp`

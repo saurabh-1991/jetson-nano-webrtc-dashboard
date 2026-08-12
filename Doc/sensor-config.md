@@ -34,9 +34,16 @@ Do not edit Python files for routine address updates.
 
 ## 3. Required compose changes for Ethernet gateway (no TTYUSB)
 
-From your live device page (`http://192.168.0.200/ip_en.html`), current values are:
+For your current Waveshare 4-endpoint topology:
 
-- Device IP: `192.168.0.200`
+- `192.168.0.201` -> VFD #1
+- `192.168.0.202` -> VFD #2
+- `192.168.0.203` -> Flow meter
+- `192.168.0.204` -> Datalogger
+
+From your datalogger endpoint page (`http://192.168.0.204/ip_en.html`), verify:
+
+- Device IP: `192.168.0.204`
 - Work Mode: `TCP Server`
 - Device Port: `4196`
 - Serial: `115200, 8, None, 1`
@@ -55,7 +62,7 @@ In `docker-compose.yml`, set backend env like this:
 ```yaml
 MODBUS_ENABLED=true
 MODBUS_TRANSPORT=tcp
-MODBUS_HOST=192.168.0.200
+MODBUS_HOST=192.168.0.204
 MODBUS_TCP_PORT=502
 MODBUS_SLAVE_ID=1
 
@@ -117,16 +124,16 @@ Example:
 
 Two common field patterns are supported.
 
-### Pattern A: flow is read from same Waveshare endpoint (recommended for your topology)
+### Pattern A: flow is read from dedicated Waveshare endpoint (recommended for your topology)
 
-For your current field setup, Waveshare static IP is:
+For your current field setup, flow endpoint is:
 
-`192.168.0.200`
+`192.168.0.203`
 
 ```yaml
 FLOW_METER_ENABLED=true
 FLOW_METER_TRANSPORT=tcp
-FLOW_METER_HOST=192.168.0.200
+FLOW_METER_HOST=192.168.0.203
 FLOW_METER_TCP_PORT=502
 FLOW_METER_SLAVE_ID=1
 
@@ -302,13 +309,25 @@ For normal field retuning (IP, slave ID, register addresses, scale, decimal), on
 
 4) Verify effective backend environment values:
 
-`docker exec -it jetson-nano-backend sh -lc "env | grep -E 'MODBUS_|FLOW_METER_' | sort"`
+`docker exec -it jetson-nano-backend sh -lc "env | grep -E 'MODBUS_|FLOW_METER_|VFD|VFD2_' | sort"`
 
 5) Confirm gateway reachability from Jetson:
 
-`ping -c 3 192.168.0.200`
+`ping -c 3 192.168.0.204`
 
-`nc -vz 192.168.0.200 502`
+`nc -vz 192.168.0.204 502`
+
+`ping -c 3 192.168.0.203`
+
+`nc -vz 192.168.0.203 502`
+
+`ping -c 3 192.168.0.201`
+
+`nc -vz 192.168.0.201 502`
+
+`ping -c 3 192.168.0.202`
+
+`nc -vz 192.168.0.202 502`
 
 6) If backend failed after recreate, recover quickly:
 
@@ -324,14 +343,26 @@ Set in `docker-compose.yml`:
 
 ```yaml
 VFD_ENABLED=true
-VFD_HOST=<VFD1_IP>
+VFD_HOST=192.168.0.201
 VFD_PORT=502
 VFD_SLAVE_ID=1
+VFD_ADDRESS_BASE=0
+VFD_ADDRESS_OFFSET=0
+VFD_RUN_COMMAND_REGISTER=8192
+VFD_SPEED_COMMAND_REGISTER=8193
+VFD_RUN_FORWARD_WORD=18
+VFD_STOP_WORD=1
 
 VFD2_ENABLED=true
-VFD2_HOST=<VFD2_IP>
+VFD2_HOST=192.168.0.202
 VFD2_PORT=502
 VFD2_SLAVE_ID=1
+VFD2_ADDRESS_BASE=0
+VFD2_ADDRESS_OFFSET=0
+VFD2_RUN_COMMAND_REGISTER=8192
+VFD2_SPEED_COMMAND_REGISTER=8193
+VFD2_RUN_FORWARD_WORD=18
+VFD2_STOP_WORD=1
 ```
 
 Other per-drive register/speed fields are also available for both profiles (`VFD_*` and `VFD2_*`).

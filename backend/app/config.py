@@ -17,6 +17,11 @@ def _parse_bool_with_default(var_name: str, default_value: bool) -> bool:
     return bool(parsed)
 
 
+def _parse_int_env(var_name: str, default_value: str) -> int:
+    value = str(os.getenv(var_name, default_value)).strip()
+    return int(value, 0)
+
+
 def _parse_optional_camera_accel(var_name: str) -> str:
     raw = str(os.getenv(var_name, "")).strip().lower()
     return raw if raw in ("", "auto", "hardware", "compat", "direct") else ""
@@ -504,6 +509,10 @@ GPIO_BUTTON_PIN = 16
 # Keep disabled by default until networking/register mapping is verified on-site.
 def _build_vfd_profile(prefix: str, default_enabled: bool = False) -> dict:
     enabled = _parse_bool_with_default(f"{prefix}_ENABLED", default_enabled)
+    address_base = _parse_int_env(f"{prefix}_ADDRESS_BASE", "0")
+    address_offset = _parse_int_env(f"{prefix}_ADDRESS_OFFSET", "0")
+    run_command_register_raw = _parse_int_env(f"{prefix}_RUN_COMMAND_REGISTER", "0x2000")
+    speed_command_register_raw = _parse_int_env(f"{prefix}_SPEED_COMMAND_REGISTER", "0x2001")
     return {
         "enabled": bool(enabled),
         "host": os.getenv(f"{prefix}_HOST", "").strip(),
@@ -514,11 +523,17 @@ def _build_vfd_profile(prefix: str, default_enabled: bool = False) -> dict:
         "max_speed_hz": float(os.getenv(f"{prefix}_MAX_SPEED_HZ", "50.0")),
         "default_speed_hz": float(os.getenv(f"{prefix}_DEFAULT_SPEED_HZ", "0.0")),
         "speed_scale": max(1, int(os.getenv(f"{prefix}_SPEED_SCALE", "100"))),
-        # Defaults match common Delta profiles but must be verified against MS300 datasheet.
-        "run_command_register": int(os.getenv(f"{prefix}_RUN_COMMAND_REGISTER", "8192")),
-        "speed_command_register": int(os.getenv(f"{prefix}_SPEED_COMMAND_REGISTER", "8193")),
-        "run_forward_word": int(os.getenv(f"{prefix}_RUN_FORWARD_WORD", "1")),
-        "stop_word": int(os.getenv(f"{prefix}_STOP_WORD", "0")),
+        # Allow either direct wire addresses (e.g. 0x2000) or logical addresses with base/offset.
+        "address_base": address_base,
+        "address_offset": address_offset,
+        "run_command_register_raw": run_command_register_raw,
+        "speed_command_register_raw": speed_command_register_raw,
+        # Resolve to 0-based Modbus wire addresses expected by pymodbus.
+        "run_command_register": (run_command_register_raw - address_base + address_offset),
+        "speed_command_register": (speed_command_register_raw - address_base + address_offset),
+        # MS300 control words (FWD run / stop).
+        "run_forward_word": _parse_int_env(f"{prefix}_RUN_FORWARD_WORD", "0x0012"),
+        "stop_word": _parse_int_env(f"{prefix}_STOP_WORD", "0x0001"),
         # Rate limit control writes to avoid burst toggling from UI retries.
         "min_write_interval_ms": max(50, int(os.getenv(f"{prefix}_MIN_WRITE_INTERVAL_MS", "150"))),
     }

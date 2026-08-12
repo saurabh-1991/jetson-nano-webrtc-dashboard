@@ -37,10 +37,14 @@ class VFDController:
         self._max_speed_hz = float(max(min_speed_hz, max_speed_hz))
         self._speed_scale = int(cfg.get("speed_scale", 100))
 
-        self._run_register = int(cfg.get("run_command_register", 8192))
-        self._speed_register = int(cfg.get("speed_command_register", 8193))
-        self._run_word = int(cfg.get("run_forward_word", 1))
-        self._stop_word = int(cfg.get("stop_word", 0))
+        self._address_base = int(cfg.get("address_base", 0))
+        self._address_offset = int(cfg.get("address_offset", 0))
+        self._run_register_raw = int(cfg.get("run_command_register_raw", 0x2000))
+        self._speed_register_raw = int(cfg.get("speed_command_register_raw", 0x2001))
+        self._run_register = int(cfg.get("run_command_register", 0x2000))
+        self._speed_register = int(cfg.get("speed_command_register", 0x2001))
+        self._run_word = int(cfg.get("run_forward_word", 0x0012))
+        self._stop_word = int(cfg.get("stop_word", 0x0001))
 
         min_write_interval_ms = int(cfg.get("min_write_interval_ms", 150))
         self._min_write_interval_seconds = max(0.05, float(min_write_interval_ms) / 1000.0)
@@ -69,6 +73,9 @@ class VFDController:
             return False
         if self._run_register < 0 or self._speed_register < 0:
             self._last_error = "invalid_register_config"
+            return False
+        if self._run_word < 0 or self._run_word > 0xFFFF or self._stop_word < 0 or self._stop_word > 0xFFFF:
+            self._last_error = "invalid_command_word_config"
             return False
         return True
 
@@ -184,8 +191,14 @@ class VFDController:
                 "host": self._host,
                 "port": int(self._port),
                 "slave_id": int(self._slave_id),
+                "address_base": int(self._address_base),
+                "address_offset": int(self._address_offset),
+                "run_command_register_raw": int(self._run_register_raw),
+                "speed_command_register_raw": int(self._speed_register_raw),
                 "run_command_register": int(self._run_register),
                 "speed_command_register": int(self._speed_register),
+                "run_forward_word": int(self._run_word),
+                "stop_word": int(self._stop_word),
                 "is_running": bool(self._is_running),
                 "speed_hz": round(float(self._speed_hz), 2),
                 "min_speed_hz": round(float(self._min_speed_hz), 2),

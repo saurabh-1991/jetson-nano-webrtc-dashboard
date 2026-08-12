@@ -108,7 +108,14 @@ Edit backend environment values in `docker-compose.yml`.
 
 ### 5.1 Datalogger via Waveshare (no USB-TTL converter)
 
-Before backend restart, verify converter web page at `http://192.168.0.200/ip_en.html`:
+Current field mapping for Waveshare 4CH endpoints:
+
+- `192.168.0.201` -> VFD #1
+- `192.168.0.202` -> VFD #2
+- `192.168.0.203` -> Flow meter
+- `192.168.0.204` -> Datalogger
+
+Before backend restart, verify datalogger converter web page at `http://192.168.0.204/ip_en.html`:
 
 - Work Mode: `TCP Server`
 - Protocol: `Modbus TCP to RTU`
@@ -120,7 +127,7 @@ If Protocol is `None` and Device Port is `4196`, backend Modbus TCP polling may 
 Required baseline:
 
 - `MODBUS_TRANSPORT=tcp`
-- `MODBUS_HOST=192.168.0.200` (your current Waveshare static IP)
+- `MODBUS_HOST=192.168.0.204` (datalogger endpoint)
 - `MODBUS_TCP_PORT=502`
 - `MODBUS_SLAVE_ID=<LOGGER_SLAVE_ID>`
 
@@ -128,7 +135,7 @@ Required baseline:
 
 - `FLOW_METER_ENABLED=true`
 - `FLOW_METER_TRANSPORT=tcp`
-- `FLOW_METER_HOST=192.168.0.200` (same gateway in current setup)
+- `FLOW_METER_HOST=192.168.0.203` (flow meter endpoint)
 - `FLOW_METER_TCP_PORT=502`
 - `FLOW_METER_SLAVE_ID=<FLOW_SLAVE_ID>`
 - `FLOW_METER_VALUE_ADDRESS=<REGISTER>`
@@ -139,21 +146,23 @@ Required baseline:
 VFD #1:
 
 - `VFD_ENABLED=true`
-- `VFD_HOST=<VFD1_IP>`
+- `VFD_HOST=192.168.0.201`
 - `VFD_PORT=502`
 - `VFD_SLAVE_ID=<VFD1_SLAVE_ID>`
 
 VFD #2:
 
 - `VFD2_ENABLED=true`
-- `VFD2_HOST=<VFD2_IP>`
+- `VFD2_HOST=192.168.0.202`
 - `VFD2_PORT=502`
 - `VFD2_SLAVE_ID=<VFD2_SLAVE_ID>`
 
 Optional per-drive tuning:
 
 - speed bounds and scaling: `VFD_MIN_SPEED_HZ`, `VFD_MAX_SPEED_HZ`, `VFD_SPEED_SCALE`
-- command registers: `VFD_RUN_COMMAND_REGISTER`, `VFD_SPEED_COMMAND_REGISTER`
+- command registers: `VFD_RUN_COMMAND_REGISTER`, `VFD_SPEED_COMMAND_REGISTER` (MS300 default `0x2000` / `0x2001`)
+- command words: `VFD_RUN_FORWARD_WORD=18` (`0x0012`), `VFD_STOP_WORD=1` (`0x0001`)
+- optional logical-address conversion: `VFD_ADDRESS_BASE`, `VFD_ADDRESS_OFFSET`
 - mirror values for VFD2 with `VFD2_*`
 
 ### 5.4 Temperature register mapping
@@ -364,21 +373,40 @@ Expected result:
 - both return success JSON,
 - `vfd_id` in response matches request.
 
+### 9.7 GPIO runtime validation
+
+```bash
+curl -s http://127.0.0.1:8000/api/gpio/status
+docker logs --tail 200 jetson-nano-backend | grep -Ei 'jetson\\.gpio|gpio initialized|gpio runtime unavailable|gpio not available'
+```
+
+Expected result:
+
+- response JSON includes `gpio.gpio_available: true`,
+- logs do not contain `Jetson.GPIO not available`.
+
 ## 10) Data-path verification (sensor to UI)
 
 Signal chain:
 
-1. Field sensors and flow meter feed datalogger registers.
-2. Datalogger RS485 connects to Waveshare RS485-to-Ethernet gateway.
-3. Backend polls Modbus TCP gateway via configured host/port/slave values.
-4. Backend decodes register map and publishes `/api/sensors/latest`.
-5. Frontend reads backend API and renders values.
+1. Field temperature channels feed datalogger registers.
+2. Flow meter is wired on its own Waveshare endpoint.
+3. Backend polls datalogger (`192.168.0.204`) and flow endpoint (`192.168.0.203`) via Modbus TCP.
+4. VFD control uses dedicated endpoints `192.168.0.201` and `192.168.0.202`.
+5. Backend decodes register map and publishes `/api/sensors/latest`.
+6. Frontend reads backend API and renders values.
 
 Offline diagnostic commands:
 
 ```bash
-ping -c 3 <WAVESHARE_IP>
-nc -vz <WAVESHARE_IP> 502
+ping -c 3 192.168.0.204
+nc -vz 192.168.0.204 502
+ping -c 3 192.168.0.203
+nc -vz 192.168.0.203 502
+ping -c 3 192.168.0.201
+nc -vz 192.168.0.201 502
+ping -c 3 192.168.0.202
+nc -vz 192.168.0.202 502
 docker exec -it jetson-nano-backend sh -lc "env | grep -E 'MODBUS_|FLOW_METER_|VFD|VFD2_' | sort"
 curl -s http://127.0.0.1:8000/api/sensors/latest
 ```
@@ -437,8 +465,10 @@ Commands:
 docker exec -it jetson-nano-backend sh -lc "env | grep -E 'MODBUS_|FLOW_METER_' | sort"
 curl -s http://127.0.0.1:8000/api/sensors/latest
 docker logs --tail 300 jetson-nano-backend | grep -Ei 'modbus|flow|connect|timeout|unavailable|exception'
-ping -c 3 <WAVESHARE_IP>
-nc -vz <WAVESHARE_IP> 502
+ping -c 3 192.168.0.204
+nc -vz 192.168.0.204 502
+ping -c 3 192.168.0.203
+nc -vz 192.168.0.203 502
 ```
 
 Expected interpretation:
@@ -571,6 +601,45 @@ cp docker-compose.yml /tmp/jetson-field-backup/docker-compose.yml.$(date +%Y%m%d
 docker-compose ps > /tmp/jetson-field-backup/compose_ps.$(date +%Y%m%d_%H%M%S).txt
 docker ps -a > /tmp/jetson-field-backup/docker_ps_a.$(date +%Y%m%d_%H%M%S).txt
 ```
+
+### 13.1 Frozen base image for offline backend rebuilds
+
+The backend Docker build is split into two layers so app code changes never
+require recompiling OpenCV/CUDA in the field:
+
+- `backend/Dockerfile.jetpack46.base` - system deps + OpenCV/CUDA built from
+  source. Expensive (45-90+ min on Jetson Nano). Only rebuild this when
+  JetPack/OpenCV/system deps actually change.
+- `backend/Dockerfile.jetpack46` - thin layer that just `FROM`s the frozen
+  base image tag and copies `app/`. Rebuilds in seconds.
+
+One-time (where internet is available), build and freeze the base image:
+
+```bash
+./scripts/build_base_image.sh jetson-backend-base:jp46-opencv455-v1
+```
+
+This produces `dist/jetson-backend-base_jp46-opencv455-v1.tar.gz` plus a
+`.sha256` checksum file. Copy both to the field device (USB drive or `scp`;
+no internet/registry required), then load it once per device:
+
+```bash
+./scripts/load_base_image.sh /path/to/jetson-backend-base_jp46-opencv455-v1.tar.gz
+```
+
+After that, normal app deployments only rebuild the thin layer:
+
+```bash
+docker-compose build jetson-backend   # seconds, not hours
+./scripts/run_backend_with_nvidia_runtime.sh
+```
+
+Important: `docker image prune -f` (used in section 12 and by the
+`docker-prune` sidecar) never removes tagged images, only dangling/untagged
+ones - so the frozen base image tag is safe from routine pruning. Bump the
+tag (e.g. `...-v2`) and rebuild the base only when JetPack/OpenCV/system
+deps change; keep the tarball backed up outside git (it is too large for
+version control).
 
 ## 14) One-command health snapshot for support handoff
 

@@ -6,6 +6,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.jetpack46
+      args:
+        BASE_IMAGE: ${BACKEND_BASE_IMAGE:-jetson-backend-base:jp46-opencv455-v1}
     container_name: jetson-nano-backend
     ports:
       - "8000:8000"
@@ -29,8 +31,8 @@ services:
       - MEDIA_WEBRTC_GATEWAY_WHEP_TEMPLATE
       - MEDIA_WEBRTC_GATEWAY_CAM1_WHEP_URL
       - MEDIA_WEBRTC_GATEWAY_CAM2_WHEP_URL
-      - VFD_ENABLED=false
-      - VFD_HOST=
+      - VFD_ENABLED=true
+      - VFD_HOST=192.168.0.201
       - VFD_PORT=502
       - VFD_SLAVE_ID=1
       - VFD_TIMEOUT_SECONDS=1.0
@@ -38,13 +40,15 @@ services:
       - VFD_MAX_SPEED_HZ=50.0
       - VFD_DEFAULT_SPEED_HZ=0.0
       - VFD_SPEED_SCALE=100
+      - VFD_ADDRESS_BASE=0
+      - VFD_ADDRESS_OFFSET=0
       - VFD_RUN_COMMAND_REGISTER=8192
       - VFD_SPEED_COMMAND_REGISTER=8193
-      - VFD_RUN_FORWARD_WORD=1
-      - VFD_STOP_WORD=0
+      - VFD_RUN_FORWARD_WORD=18
+      - VFD_STOP_WORD=1
       - VFD_MIN_WRITE_INTERVAL_MS=150
-      - VFD2_ENABLED=false
-      - VFD2_HOST=
+      - VFD2_ENABLED=true
+      - VFD2_HOST=192.168.0.202
       - VFD2_PORT=502
       - VFD2_SLAVE_ID=1
       - VFD2_TIMEOUT_SECONDS=1.0
@@ -52,15 +56,17 @@ services:
       - VFD2_MAX_SPEED_HZ=50.0
       - VFD2_DEFAULT_SPEED_HZ=0.0
       - VFD2_SPEED_SCALE=100
+      - VFD2_ADDRESS_BASE=0
+      - VFD2_ADDRESS_OFFSET=0
       - VFD2_RUN_COMMAND_REGISTER=8192
       - VFD2_SPEED_COMMAND_REGISTER=8193
-      - VFD2_RUN_FORWARD_WORD=1
-      - VFD2_STOP_WORD=0
+      - VFD2_RUN_FORWARD_WORD=18
+      - VFD2_STOP_WORD=1
       - VFD2_MIN_WRITE_INTERVAL_MS=150
       - MODBUS_ENABLED=true
       - MODBUS_TRANSPORT=tcp
       - MODBUS_PORT=/dev/ttyUSB0
-      - MODBUS_HOST=192.168.0.200
+      - MODBUS_HOST=192.168.0.204
       - MODBUS_TCP_PORT=502
       - MODBUS_SLAVE_ID=1
       - MODBUS_BAUDRATE=9600
@@ -73,7 +79,7 @@ services:
       - MODBUS_ADDRESS_OFFSET=0
       - FLOW_METER_ENABLED=true
       - FLOW_METER_TRANSPORT=tcp
-      - FLOW_METER_HOST=192.168.0.200
+      - FLOW_METER_HOST=192.168.0.203
       - FLOW_METER_TCP_PORT=502
       - FLOW_METER_SLAVE_ID=1
       - FLOW_METER_TIMEOUT=0.8
