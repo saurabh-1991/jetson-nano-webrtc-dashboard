@@ -643,6 +643,7 @@ class ExperimentManager:
                     "cold_zone_temperature": sample.get("cold_zone_temperature"),
                     "exhaust_temp": sample.get("exhaust_temp"),
                     "flow_rate": sample.get("flow_rate"),
+                    "flow_velocity": sample.get("flow_velocity"),
                     "source": sample.get("source"),
                     "sensor_timestamp": sample.get("timestamp"),
                 }
@@ -695,6 +696,7 @@ class ExperimentManager:
                     "cold_zone_temperature",
                     "exhaust_temp",
                     "flow_rate",
+                    "flow_velocity",
                     "source",
                     "sensor_timestamp",
                 ],

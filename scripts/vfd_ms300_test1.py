@@ -1,7 +1,7 @@
 from pymodbus.client import ModbusTcpClient
 import time
 
-WAVESHARE_IP = "192.168.0.200"
+WAVESHARE_IP = "192.168.0.202"
 WAVESHARE_PORT = 502
 
 VFD1 = 1
@@ -151,26 +151,26 @@ class DeltaMS300:
 if __name__ == "__main__":
 
     vfd1 = DeltaMS300(VFD1)
-    vfd2 = DeltaMS300(VFD2)
+    #vfd2 = DeltaMS300(VFD2)
 
     try:
 
         if not vfd1.connect():
             exit(1)
 
-        if not vfd2.connect():
-            exit(1)
+        # if not vfd2.connect():
+        #     exit(1)
 
         # First test: READ ONLY
         vfd1.read_status()
-        vfd2.read_status()
+        # vfd2.read_status()
 
         vfd1.read_output_frequency()
-        vfd2.read_output_frequency()
+        # vfd2.read_output_frequency()
 
         # Don't start motors until communication is verified.
 
     finally:
 
         vfd1.close()
-        vfd2.close()
+        # vfd2.close()

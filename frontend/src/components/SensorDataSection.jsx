@@ -9,7 +9,8 @@ const SERIES = [
   { key: 'hot_zone_temperature', label: 'Hot Zone Temperature', color: '#ef4444', unit: '°C' },
   { key: 'cold_zone_temperature', label: 'Cold Zone Temperature', color: '#3b82f6', unit: '°C' },
   { key: 'exhaust_temp', label: 'Exhaust Temp', color: '#f59e0b', unit: '°C' },
-  { key: 'flow_rate', label: 'Flow Rate', color: '#10b981', unit: 'L/min' },
+  { key: 'flow_rate', label: 'Flow Rate', color: '#10b981', unit: 'CFM' },
+  { key: 'flow_velocity', label: 'Flow Velocity', color: '#8b5cf6', unit: 'Nm/s' },
 ]
 
 const HISTORY_INTERVAL_OPTIONS = [
@@ -38,7 +39,7 @@ function getRetryDelayMs(failureCount) {
 function formatValue(value, series) {
   if (typeof value !== 'number') return '--'
   const unit = (series && series.unit) ? String(series.unit) : ''
-  const decimals = unit === 'L/min' ? 2 : 1
+  const decimals = series?.key === 'flow_rate' ? 2 : unit === 'Nm/s' ? 3 : 1
   return `${value.toFixed(decimals)}${unit ? ` ${unit}` : ''}`
 }
 
@@ -217,7 +218,7 @@ export const SensorDataSection = () => {
       const value = chartMeta.maxY - ratio * range
       const y = ratio * graphHeight
       const unit = activeSeries?.unit ? String(activeSeries.unit) : ''
-      const decimals = unit === 'L/min' ? 2 : 1
+      const decimals = activeSeries?.key === 'flow_rate' ? 2 : unit === 'Nm/s' ? 3 : 1
       ticks.push({ y, label: `${value.toFixed(decimals)}${unit ? ` ${unit}` : ''}` })
     }
     return ticks

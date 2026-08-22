@@ -1,7 +1,7 @@
 from pymodbus.client import ModbusTcpClient
 
 client = ModbusTcpClient(
-    "192.168.0.200",
+    "192.168.0.202",
     port=502,
     timeout=10,
     retries=5

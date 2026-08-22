@@ -3,6 +3,7 @@
 import logging
 import math
 import os
+import struct
 import threading
 import time
 from collections import deque
@@ -191,6 +192,44 @@ class SensorDataService:
         return int(response.registers[0])
 
     @staticmethod
+    def _read_register_block(client, register_type: str, address: int, count: int, unit: int):
+        if register_type == "input":
+            response = client.read_input_registers(address=address, count=count, unit=unit)
+        else:
+            response = client.read_holding_registers(address=address, count=count, unit=unit)
+
+        if not response or response.isError():
+            return None
+
+        registers = list(response.registers or [])
+        if len(registers) < int(count):
+            return None
+        return [int(v) & 0xFFFF for v in registers]
+
+    @staticmethod
+    def _decode_float32(registers, word_order: str = "ab", byte_order: str = "big"):
+        if not registers or len(registers) < 2:
+            return None
+
+        r1 = int(registers[0]) & 0xFFFF
+        r2 = int(registers[1]) & 0xFFFF
+
+        mode = str(word_order or "ab").strip().lower()
+        if mode == "ba":
+            words = (r2, r1)
+        elif mode == "byte_swap":
+            words = ((((r1 & 0xFF) << 8) | (r1 >> 8)), (((r2 & 0xFF) << 8) | (r2 >> 8)))
+        elif mode == "both_swap":
+            words = ((((r2 & 0xFF) << 8) | (r2 >> 8)), (((r1 & 0xFF) << 8) | (r1 >> 8)))
+        else:
+            words = (r1, r2)
+
+        byte_mode = str(byte_order or "big").strip().lower()
+        pack_fmt = "<HH" if byte_mode == "little" else ">HH"
+        unpack_fmt = "<f" if byte_mode == "little" else ">f"
+        return float(struct.unpack(unpack_fmt, struct.pack(pack_fmt, words[0], words[1]))[0])
+
+    @staticmethod
     def _to_log_number(value):
         if value is None:
             return None
@@ -219,10 +258,12 @@ class SensorDataService:
             sample.get("cold_zone_temperature"),
             sample.get("exhaust_temp"),
             sample.get("flow_rate"),
+            sample.get("flow_velocity"),
             sample.get("hot_zone_status"),
             sample.get("cold_zone_status"),
             sample.get("exhaust_status"),
             sample.get("flow_status"),
+            sample.get("flow_velocity_status"),
             tuple(row_sig),
         )
 
@@ -245,7 +286,7 @@ class SensorDataService:
         self._last_sensor_debug_signature = signature
 
         logger.info(
-            "Sensor debug | source=%s | hot=%s(%s) cold=%s(%s) exhaust=%s(%s) flow=%s(%s)",
+            "Sensor debug | source=%s | hot=%s(%s) cold=%s(%s) exhaust=%s(%s) flow=%s(%s) velocity=%s(%s)",
             sample.get("source"),
             sample.get("hot_zone_temperature"),
             sample.get("hot_zone_status"),
@@ -255,6 +296,8 @@ class SensorDataService:
             sample.get("exhaust_status"),
             sample.get("flow_rate"),
             sample.get("flow_status"),
+            sample.get("flow_velocity"),
+            sample.get("flow_velocity_status"),
         )
 
         if modbus_debug_rows:
@@ -508,6 +551,18 @@ class SensorDataService:
         address_offset = int(cfg.get("address_offset", 0) or 0)
 
         value_address = self._resolve_register_address(int(cfg.get("value_address", 0)), address_base, address_offset)
+        value_register_count = max(1, int(cfg.get("value_register_count", 1)))
+        value_encoding = str(cfg.get("value_encoding", "scaled_int") or "scaled_int").strip().lower()
+        word_order = str(cfg.get("word_order", "ab") or "ab").strip().lower()
+        byte_order = str(cfg.get("byte_order", "big") or "big").strip().lower()
+
+        velocity_address_cfg = cfg.get("velocity_address")
+        velocity_address = (
+            self._resolve_register_address(int(velocity_address_cfg), address_base, address_offset)
+            if velocity_address_cfg is not None
+            else None
+        )
+        velocity_register_count = max(1, int(cfg.get("velocity_register_count", 2)))
         decimal_address_cfg = cfg.get("decimal_address")
         status_address_cfg = cfg.get("status_address")
         decimal_address = (
@@ -521,18 +576,30 @@ class SensorDataService:
             else None
         )
 
-        if value_address < 0 or (decimal_address is not None and decimal_address < 0) or (status_address is not None and status_address < 0):
+        if (
+            value_address < 0
+            or (velocity_address is not None and velocity_address < 0)
+            or (decimal_address is not None and decimal_address < 0)
+            or (status_address is not None and status_address < 0)
+        ):
             logger.warning(
-                "Flow meter register config invalid (value=%s decimal=%s status=%s)",
+                "Flow meter register config invalid (value=%s velocity=%s decimal=%s status=%s)",
                 value_address,
+                velocity_address,
                 decimal_address,
                 status_address,
             )
             return None
 
         try:
-            raw_value = self._read_single_register(client, register_type, value_address, unit)
-            if raw_value is None:
+            value_registers = self._read_register_block(
+                client,
+                register_type,
+                value_address,
+                value_register_count,
+                unit,
+            )
+            if value_registers is None:
                 return None
 
             decimal_pos = None
@@ -553,23 +620,31 @@ class SensorDataService:
                 return {
                     "flow_rate": None,
                     "flow_status": status_text,
+                    "flow_velocity": None,
+                    "flow_velocity_status": status_text,
                 }
 
-            scale = float(cfg.get("scale", 1.0))
-            precision = 2
-            if decimal_pos is not None:
-                derived_scale = self._decimal_scale(decimal_pos)
-                if derived_scale is not None:
-                    scale = float(derived_scale)
-                    precision = int(decimal_pos)
+            if value_encoding == "float32":
+                decoded = self._decode_float32(value_registers, word_order=word_order, byte_order=byte_order)
+                if decoded is None:
+                    return None
+                decoded = round(decoded, 4)
+            else:
+                scale = float(cfg.get("scale", 1.0))
+                precision = 2
+                if decimal_pos is not None:
+                    derived_scale = self._decimal_scale(decimal_pos)
+                    if derived_scale is not None:
+                        scale = float(derived_scale)
+                        precision = int(decimal_pos)
 
-            decoded = self._decode_register(
-                raw_value=raw_value,
-                signed=bool(cfg.get("signed", False)),
-                scale=scale,
-                offset=float(cfg.get("offset", 0.0)),
-                precision=precision,
-            )
+                decoded = self._decode_register(
+                    raw_value=int(value_registers[0]),
+                    signed=bool(cfg.get("signed", False)),
+                    scale=scale,
+                    offset=float(cfg.get("offset", 0.0)),
+                    precision=precision,
+                )
 
             min_value = float(cfg.get("min_value", 0.0))
             max_value = float(cfg.get("max_value", 99999.0))
@@ -581,9 +656,50 @@ class SensorDataService:
                     max_value,
                 )
 
+            velocity_value = None
+            velocity_status = status_text
+            if velocity_address is not None:
+                velocity_registers = self._read_register_block(
+                    client,
+                    register_type,
+                    velocity_address,
+                    velocity_register_count,
+                    unit,
+                )
+                if velocity_registers is not None:
+                    if value_encoding == "float32":
+                        velocity_value = self._decode_float32(
+                            velocity_registers,
+                            word_order=word_order,
+                            byte_order=byte_order,
+                        )
+                        if velocity_value is not None:
+                            velocity_value = round(float(velocity_value), 4)
+                    else:
+                        velocity_value = self._decode_register(
+                            raw_value=int(velocity_registers[0]),
+                            signed=bool(cfg.get("signed", False)),
+                            scale=float(cfg.get("velocity_scale", cfg.get("scale", 1.0))),
+                            offset=float(cfg.get("velocity_offset", 0.0)),
+                            precision=2,
+                        )
+
+                    if velocity_value is not None:
+                        vel_min = float(cfg.get("velocity_min_value", -99999.0))
+                        vel_max = float(cfg.get("velocity_max_value", 99999.0))
+                        if velocity_value < vel_min or velocity_value > vel_max:
+                            logger.warning(
+                                "Flow meter velocity out of range: %s (min=%s, max=%s)",
+                                velocity_value,
+                                vel_min,
+                                vel_max,
+                            )
+
             return {
                 "flow_rate": decoded,
                 "flow_status": status_text,
+                "flow_velocity": velocity_value,
+                "flow_velocity_status": velocity_status if velocity_value is not None else "unavailable",
             }
         except Exception as e:
             logger.warning("Flow meter Modbus exception: %s", e)
@@ -600,7 +716,9 @@ class SensorDataService:
             "cold_zone_temperature": round(cold, 1),
             "exhaust_temp": round(exhaust, 1),
             "flow_rate": round(11.5 + 1.8 * math.sin(now / 12.0 + 0.6), 2),
+            "flow_velocity": round(9.0 + 0.8 * math.sin(now / 10.0 + 0.25), 3),
             "flow_status": "in_range",
+            "flow_velocity_status": "in_range",
             "timestamp": datetime.now().isoformat(),
             "source": "fallback",
         }
@@ -634,10 +752,14 @@ class SensorDataService:
             exhaust_status = logger_data.get("exhaust_temp_status", "unknown") if logger_data is not None else "unavailable"
 
             flow_value = None
+            flow_velocity_value = None
             flow_status = "disabled" if not self._flow_meter_enabled else "unavailable"
+            flow_velocity_status = "disabled" if not self._flow_meter_enabled else "unavailable"
             if flow_data is not None:
                 flow_value = self._safe_float(flow_data.get("flow_rate"))
                 flow_status = flow_data.get("flow_status", "unknown")
+                flow_velocity_value = self._safe_float(flow_data.get("flow_velocity"))
+                flow_velocity_status = flow_data.get("flow_velocity_status", "unknown")
 
             has_logger = logger_data is not None
             has_flow = flow_data is not None
@@ -653,10 +775,12 @@ class SensorDataService:
                 "cold_zone_temperature": self._safe_float(logger_data.get("cold_zone_temperature")) if logger_data is not None else None,
                 "exhaust_temp": self._safe_float(logger_data.get("exhaust_temp")) if logger_data is not None else None,
                 "flow_rate": flow_value,
+                "flow_velocity": flow_velocity_value,
                 "hot_zone_status": hot_status,
                 "cold_zone_status": cold_status,
                 "exhaust_status": exhaust_status,
                 "flow_status": flow_status,
+                "flow_velocity_status": flow_velocity_status,
                 "timestamp": datetime.now().isoformat(),
                 "source": source,
             }
@@ -666,10 +790,12 @@ class SensorDataService:
                 "cold_zone_temperature": None,
                 "exhaust_temp": None,
                 "flow_rate": None,
+                "flow_velocity": None,
                 "hot_zone_status": "unavailable",
                 "cold_zone_status": "unavailable",
                 "exhaust_status": "unavailable",
                 "flow_status": "disabled" if not self._flow_meter_enabled else "unavailable",
+                "flow_velocity_status": "disabled" if not self._flow_meter_enabled else "unavailable",
                 "timestamp": datetime.now().isoformat(),
                 "source": "modbus_unavailable",
             }
@@ -731,10 +857,12 @@ class SensorDataService:
                     "cold_zone_temperature": None,
                     "exhaust_temp": None,
                     "flow_rate": None,
+                    "flow_velocity": None,
                     "hot_zone_status": "sampling_in_progress",
                     "cold_zone_status": "sampling_in_progress",
                     "exhaust_status": "sampling_in_progress",
                     "flow_status": "sampling_in_progress",
+                    "flow_velocity_status": "sampling_in_progress",
                     "timestamp": datetime.now().isoformat(),
                     "source": "sampling_in_progress",
                 }

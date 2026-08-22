@@ -120,6 +120,12 @@ FLOW_METER_CONFIG = {
     "address_base": _to_int("FLOW_METER_ADDRESS_BASE", "0"),
     "address_offset": _to_int("FLOW_METER_ADDRESS_OFFSET", "0"),
     "value_address": _to_int("FLOW_METER_VALUE_ADDRESS", "0"),
+    "value_register_count": max(1, _to_int("FLOW_METER_VALUE_REGISTER_COUNT", "1")),
+    "value_encoding": os.getenv("FLOW_METER_VALUE_ENCODING", "scaled_int").strip().lower(),
+    "word_order": os.getenv("FLOW_METER_WORD_ORDER", "ab").strip().lower(),
+    "byte_order": os.getenv("FLOW_METER_BYTE_ORDER", "big").strip().lower(),
+    "velocity_address": os.getenv("FLOW_METER_VELOCITY_ADDRESS", "").strip(),
+    "velocity_register_count": max(1, _to_int("FLOW_METER_VELOCITY_REGISTER_COUNT", "2")),
     "decimal_address": os.getenv("FLOW_METER_DECIMAL_ADDRESS", "").strip(),
     "status_address": os.getenv("FLOW_METER_STATUS_ADDRESS", "").strip(),
     "scale": float(os.getenv("FLOW_METER_SCALE", "0.1")),
@@ -127,6 +133,10 @@ FLOW_METER_CONFIG = {
     "signed": _to_bool("FLOW_METER_SIGNED", "false"),
     "min_value": float(os.getenv("FLOW_METER_MIN_VALUE", "0.0")),
     "max_value": float(os.getenv("FLOW_METER_MAX_VALUE", "99999.0")),
+    "velocity_scale": float(os.getenv("FLOW_METER_VELOCITY_SCALE", "1.0")),
+    "velocity_offset": float(os.getenv("FLOW_METER_VELOCITY_OFFSET", "0.0")),
+    "velocity_min_value": float(os.getenv("FLOW_METER_VELOCITY_MIN_VALUE", "-99999.0")),
+    "velocity_max_value": float(os.getenv("FLOW_METER_VELOCITY_MAX_VALUE", "99999.0")),
     "failure_backoff_seconds": max(0.5, float(os.getenv("FLOW_METER_FAILURE_BACKOFF_SECONDS", "5.0"))),
 }
 
@@ -144,3 +154,4 @@ def _optional_int(raw_value: str):
 
 FLOW_METER_CONFIG["decimal_address"] = _optional_int(FLOW_METER_CONFIG.get("decimal_address"))
 FLOW_METER_CONFIG["status_address"] = _optional_int(FLOW_METER_CONFIG.get("status_address"))
+FLOW_METER_CONFIG["velocity_address"] = _optional_int(FLOW_METER_CONFIG.get("velocity_address"))
