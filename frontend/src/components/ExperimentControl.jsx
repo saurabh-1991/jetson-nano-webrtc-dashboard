@@ -364,12 +364,6 @@ export const ExperimentControl = ({
   const handleDownload = (runId) => {
     if (!runId || downloadingRunId) return
 
-    if (active?.active) {
-      setError('Stop the active run before downloading archives (load-shedding safeguard).')
-      setInfoMessage('')
-      return
-    }
-
     // Always stream the download directly through the browser's native download
     // manager instead of buffering the ZIP into a JS Blob first. Experiment
     // archives can reach multiple GB (hours of dual-camera video); buffering that
@@ -380,7 +374,7 @@ export const ExperimentControl = ({
     setInfoMessage(`Download started: ${runId}.zip. Large runs can take a while for the server to prepare before your browser shows download progress.`)
     setDownloadingRunId(runId)
 
-    const directUrl = experimentsAPI.getDownloadUrl(runId)
+    const directUrl = `${experimentsAPI.getDownloadUrl(runId)}?force=1`
     const anchor = document.createElement('a')
     anchor.href = directUrl
     anchor.rel = 'noopener noreferrer'

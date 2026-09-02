@@ -1713,12 +1713,12 @@ def _build_stored_zip_archive(source_dir: str, archive_path: str) -> str:
 
 
 @app.get("/api/experiments/{run_id}/download")
-async def experiments_download(run_id: str):
+async def experiments_download(run_id: str, force: bool = False):
     """Download all run artifacts as a ZIP archive."""
     manager = _get_experiment_manager()
 
     try:
-        if bool(EXPERIMENTS_DOWNLOAD_BLOCK_WHEN_ACTIVE_RUN):
+        if (not bool(force)) and bool(EXPERIMENTS_DOWNLOAD_BLOCK_WHEN_ACTIVE_RUN):
             active = await run_in_threadpool(manager.get_active_run)
             if bool((active or {}).get("active")):
                 raise HTTPException(
@@ -1726,7 +1726,7 @@ async def experiments_download(run_id: str):
                     detail="Download is blocked while a run is active to reduce power/load spikes.",
                 )
 
-        if bool(EXPERIMENTS_DOWNLOAD_BLOCK_WHEN_LIVE_STREAMING):
+        if (not bool(force)) and bool(EXPERIMENTS_DOWNLOAD_BLOCK_WHEN_LIVE_STREAMING):
             stream_activity = _download_live_stream_activity()
             stream_clients = int(stream_activity.get("mjpeg", 0)) + int(stream_activity.get("h264", 0)) + int(stream_activity.get("webrtc", 0))
             if stream_clients > 0:

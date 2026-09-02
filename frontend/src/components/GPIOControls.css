@@ -20,6 +20,10 @@
   gap: 0.65rem;
 }
 
+.output-list.single {
+  max-width: 420px;
+}
+
 .vfd-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

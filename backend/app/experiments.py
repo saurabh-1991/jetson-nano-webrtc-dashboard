@@ -27,6 +27,7 @@ from .config import (
     EXPERIMENTS_STORAGE_PREFERRED_DIR,
     EXPERIMENTS_VIDEO_CODEC,
     EXPERIMENTS_VIDEO_ENABLED,
+    EXPERIMENTS_VIDEO_OVERLAY_ENABLED,
     EXPERIMENTS_VIDEO_FPS,
     EXPERIMENTS_VIDEO_SEGMENT_SECONDS,
     EXPERIMENTS_VIDEO_USE_SHARED_FRAME_CACHE,
@@ -167,6 +168,104 @@ class ExperimentManager:
         if len(text) != 4:
             text = "mp4v"
         return cv2.VideoWriter_fourcc(*text)
+
+    @staticmethod
+    def _overlay_value(value: Any, fmt: str = ".2f", fallback: str = "--") -> str:
+        if value is None:
+            return fallback
+        try:
+            number = float(value)
+            return format(number, fmt)
+        except Exception:
+            text = str(value).strip()
+            return text if text else fallback
+
+    @staticmethod
+    def _overlay_time_hms(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "--"
+        if "T" in text:
+            text = text.split("T", 1)[1]
+        if text.endswith("Z"):
+            text = text[:-1]
+        if "." in text:
+            text = text.split(".", 1)[0]
+        if "+" in text:
+            text = text.split("+", 1)[0]
+        return text or "--"
+
+    def _draw_recording_overlay(
+        self,
+        frame,
+        camera_id: str,
+        run_id: str,
+        now_epoch: float,
+        started_epoch: float,
+        sample: Dict[str, Any],
+    ):
+        if frame is None:
+            return frame
+
+        if len(frame.shape) == 2:
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        elif len(frame.shape) == 3 and frame.shape[2] == 4:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+        else:
+            frame = frame.copy()
+
+        h, w = frame.shape[:2]
+        if h < 140 or w < 220:
+            return frame
+
+        compact = h < 420
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.44 if compact else 0.5
+        thickness = 1
+        row_gap = 16 if compact else 18
+        margin = max(8, int(min(w, h) * 0.02))
+        pad_x = 10
+        pad_y = 10
+        left_col_x = margin + pad_x
+        right_col_x = margin + int(min(int(w * 0.36), 360) * 0.52)
+
+        now_dt = datetime.fromtimestamp(now_epoch)
+        now_day = now_dt.strftime("%a")
+        now_date = now_dt.strftime("%Y-%m-%d")
+        now_time = now_dt.strftime("%H:%M:%S.%f")[:-3]
+        offset_seconds = max(0.0, now_epoch - float(started_epoch))
+
+        row_pairs = [
+            ("Day", now_day, "Date", now_date),
+            ("Time", now_time, "Offset", "{0:.3f}s".format(offset_seconds)),
+            ("Hot", "{0} C".format(self._overlay_value(sample.get("hot_zone_temperature"), ".1f")), "Cold", "{0} C".format(self._overlay_value(sample.get("cold_zone_temperature"), ".1f"))),
+            ("Exhaust", "{0} C".format(self._overlay_value(sample.get("exhaust_temp"), ".1f")), "Flow", "{0} CFM".format(self._overlay_value(sample.get("flow_rate"), ".2f"))),
+            ("Velocity", "{0} Nm/s".format(self._overlay_value(sample.get("flow_velocity"), ".3f")), "SensorTs", self._overlay_time_hms(sample.get("timestamp"))),
+        ]
+        if compact:
+            row_pairs = row_pairs[:-1] + [("Run", str(run_id), "Cam", str(camera_id))]
+        else:
+            row_pairs.append(("Run", str(run_id), "Cam", str(camera_id)))
+
+        card_width = min(int(w * 0.36), 360)
+        card_height = (2 * pad_y) + len(row_pairs) * row_gap + 6
+        x1, y1 = margin, margin
+        x2 = min(w - margin, x1 + card_width)
+        y2 = min(h - margin, y1 + card_height)
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), (20, 20, 20), -1)
+        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0.0, frame)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (200, 200, 200), 1)
+
+        for idx, (l_key, l_val, r_key, r_val) in enumerate(row_pairs):
+            baseline_y = y1 + pad_y + ((idx + 1) * row_gap)
+            left_text = "{0}: {1}".format(l_key, l_val)
+            right_text = "{0}: {1}".format(r_key, r_val)
+            cv2.putText(frame, left_text, (left_col_x, baseline_y), font, font_scale, (235, 235, 235), thickness, cv2.LINE_AA)
+            cv2.putText(frame, right_text, (right_col_x, baseline_y), font, font_scale, (235, 235, 235), thickness, cv2.LINE_AA)
+
+        return frame
 
     def _ensure_video_capture_context(self, camera_id: str):
         with self._lock:
@@ -526,6 +625,17 @@ class ExperimentManager:
 
                 if writer is None:
                     _start_segment(frame)
+
+                if EXPERIMENTS_VIDEO_OVERLAY_ENABLED:
+                    sample = self._sensor_latest_provider() or {}
+                    frame = self._draw_recording_overlay(
+                        frame=frame,
+                        camera_id=camera_id,
+                        run_id=run_id,
+                        now_epoch=time.time(),
+                        started_epoch=started_epoch,
+                        sample=sample,
+                    )
 
                 writer.write(frame)
                 frame_count += 1

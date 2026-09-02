@@ -45,6 +45,15 @@ class VFDController:
         self._speed_register = int(cfg.get("speed_command_register", 0x2001))
         self._run_word = int(cfg.get("run_forward_word", 0x0012))
         self._stop_word = int(cfg.get("stop_word", 0x0001))
+        self._status_poll_enabled = bool(cfg.get("status_poll_enabled", True))
+        self._status_poll_interval_seconds = max(
+            0.1,
+            float(int(cfg.get("status_poll_interval_ms", 400))) / 1000.0,
+        )
+        self._operation_status_register = int(cfg.get("operation_status_register", 0x2101))
+        self._output_frequency_register = int(cfg.get("output_frequency_register", 0x2103))
+        self._run_command_echo_register = int(cfg.get("run_command_echo_register", 0x2000))
+        self._speed_command_echo_register = int(cfg.get("speed_command_echo_register", 0x2001))
 
         min_write_interval_ms = int(cfg.get("min_write_interval_ms", 150))
         self._min_write_interval_seconds = max(0.05, float(min_write_interval_ms) / 1000.0)
@@ -54,6 +63,11 @@ class VFDController:
         self._last_write_ts = 0.0
         self._last_error: Optional[str] = None
         self._is_running = False
+        self._last_polled_state_ts = 0.0
+        self._last_operation_status_raw: Optional[int] = None
+        self._last_output_frequency_hz: Optional[float] = None
+        self._last_run_command_echo: Optional[int] = None
+        self._last_speed_command_echo: Optional[int] = None
         default_speed_hz = float(cfg.get("default_speed_hz", 0.0))
         self._speed_hz = float(max(self._min_speed_hz, min(self._max_speed_hz, default_speed_hz)))
 
@@ -129,12 +143,66 @@ class VFDController:
             )
             return False
 
+    def _read_register(self, register: int) -> Optional[int]:
+        client = self._ensure_client()
+        if client is None:
+            return None
+
+        try:
+            response = client.read_holding_registers(address=int(register), count=1, unit=self._slave_id)
+            if not response or response.isError():
+                return None
+            return int(response.registers[0])
+        except Exception:
+            return None
+
+    def _refresh_state_from_device(self, force: bool = False):
+        if not self._status_poll_enabled:
+            return
+
+        now = time.time()
+        if not force and (now - self._last_polled_state_ts) < self._status_poll_interval_seconds:
+            return
+
+        op_raw = self._read_register(self._operation_status_register) if self._operation_status_register >= 0 else None
+        out_raw = self._read_register(self._output_frequency_register) if self._output_frequency_register >= 0 else None
+        run_echo = self._read_register(self._run_command_echo_register) if self._run_command_echo_register >= 0 else None
+        speed_echo = self._read_register(self._speed_command_echo_register) if self._speed_command_echo_register >= 0 else None
+
+        self._last_polled_state_ts = now
+        self._last_operation_status_raw = op_raw
+        self._last_run_command_echo = run_echo
+        self._last_speed_command_echo = speed_echo
+
+        if out_raw is not None:
+            self._last_output_frequency_hz = round(float(out_raw) / float(max(1, self._speed_scale)), 2)
+        else:
+            self._last_output_frequency_hz = None
+
+        # Prefer direct command echo when available, then output frequency fallback.
+        if run_echo is not None:
+            if run_echo == self._run_word:
+                self._is_running = True
+            elif run_echo == self._stop_word:
+                self._is_running = False
+        elif self._last_output_frequency_hz is not None:
+            if self._last_output_frequency_hz > 0.05:
+                self._is_running = True
+            elif self._last_output_frequency_hz <= 0.01:
+                self._is_running = False
+
+        if speed_echo is not None:
+            speed_from_echo = float(speed_echo) / float(max(1, self._speed_scale))
+            if self._min_speed_hz <= speed_from_echo <= self._max_speed_hz:
+                self._speed_hz = speed_from_echo
+
     def set_run_state(self, run: bool) -> bool:
         with self._state_lock:
             word = self._run_word if bool(run) else self._stop_word
             ok = self._write_register(self._run_register, word)
             if ok:
                 self._is_running = bool(run)
+                self._refresh_state_from_device(force=True)
             return ok
 
     def set_speed_hz(self, speed_hz: float) -> Dict[str, Any]:
@@ -162,6 +230,7 @@ class VFDController:
             ok = self._write_register(self._speed_register, register_value)
             if ok:
                 self._speed_hz = requested
+                self._refresh_state_from_device(force=True)
                 return {
                     "success": True,
                     "speed_hz": round(self._speed_hz, 2),
@@ -183,6 +252,7 @@ class VFDController:
 
     def get_status(self) -> Dict[str, Any]:
         with self._state_lock:
+            self._refresh_state_from_device(force=False)
             return {
                 "vfd_id": self._vfd_id,
                 "enabled": bool(self._enabled),
@@ -199,6 +269,11 @@ class VFDController:
                 "speed_command_register": int(self._speed_register),
                 "run_forward_word": int(self._run_word),
                 "stop_word": int(self._stop_word),
+                "status_poll_enabled": bool(self._status_poll_enabled),
+                "operation_status_raw": self._last_operation_status_raw,
+                "output_frequency_hz": self._last_output_frequency_hz,
+                "run_command_echo": self._last_run_command_echo,
+                "speed_command_echo": self._last_speed_command_echo,
                 "is_running": bool(self._is_running),
                 "speed_hz": round(float(self._speed_hz), 2),
                 "min_speed_hz": round(float(self._min_speed_hz), 2),

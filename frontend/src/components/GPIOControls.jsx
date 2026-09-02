@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { gpioAPI } from '../services/api'
 import { vfdAPI } from '../services/api'
 import { getApiCooldownState } from '../services/api'
@@ -8,14 +8,12 @@ import './GPIOControls.css'
 
 export const GPIOControls = () => {
   const OUTPUTS = [
-    { key: 'exhaust_blower', label: 'Exhaust Blower' },
-    { key: 'air_mixer_blower', label: 'Air Mixer Blower' },
     { key: 'lpg_burner', label: 'LPG Burner' },
   ]
 
   const VFD_TARGETS = [
-    { id: 'vfd1', label: 'Delta VFD MS300 #1' },
-    { id: 'vfd2', label: 'Delta VFD MS300 #2' },
+    { id: 'vfd1', label: 'Cold Air' },
+    { id: 'vfd2', label: 'Exhaust Blower' },
   ]
 
   const [outputsState, setOutputsState] = useState({})
@@ -27,6 +25,11 @@ export const GPIOControls = () => {
   const [vfdSpeedDrafts, setVfdSpeedDrafts] = useState({})
   const [vfdSpeedDirty, setVfdSpeedDirty] = useState({})
   const [error, setError] = useState(null)
+  const vfdSpeedDirtyRef = useRef({})
+
+  useEffect(() => {
+    vfdSpeedDirtyRef.current = vfdSpeedDirty
+  }, [vfdSpeedDirty])
 
   useEffect(() => {
     fetchControlStatus()
@@ -72,7 +75,7 @@ export const GPIOControls = () => {
         }
 
         freshStatuses[vfdId] = vfd
-        if (!vfdSpeedDirty[vfdId]) {
+        if (!vfdSpeedDirtyRef.current[vfdId]) {
           draftUpdates[vfdId] = String(vfd.speed_hz ?? 0)
         }
       })
@@ -141,10 +144,15 @@ export const GPIOControls = () => {
     setError(null)
     try {
       const response = await vfdAPI.setRun(nextRunState, vfdId)
+      const ok = !!response?.data?.success
       const updated = response?.data?.vfd || null
       if (updated) {
         setVfdStatuses((prev) => ({ ...prev, [vfdId]: updated }))
       }
+      if (!ok) {
+        setError(`Failed to ${nextRunState ? 'start' : 'stop'} ${vfdId.toUpperCase()}`)
+      }
+      await fetchControlStatus()
     } catch (err) {
       setError(`Failed to ${nextRunState ? 'start' : 'stop'} ${vfdId.toUpperCase()}`)
       if (!shouldThrottleClientNoise('vfd_run_toggle_failed')) {
@@ -194,6 +202,7 @@ export const GPIOControls = () => {
       } else {
         setVfdSpeedDirty((prev) => ({ ...prev, [vfdId]: false }))
       }
+      await fetchControlStatus()
     } catch (err) {
       const detail = err?.response?.data?.detail
       const detailMessage = typeof detail?.error === 'string' ? detail.error : null
@@ -222,7 +231,7 @@ export const GPIOControls = () => {
     <div className="gpio-controls-container">
       <h2>Controls</h2>
 
-      <div className="output-list">
+      <div className={`output-list ${OUTPUTS.length <= 1 ? 'single' : ''}`}>
         {OUTPUTS.map((output) => {
           const current = outputsState[output.key] || {}
           const isOn = !!current.on

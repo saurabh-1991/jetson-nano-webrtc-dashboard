@@ -63,10 +63,10 @@ SENSOR_REGISTER_MAP = {
         "label": "Hot Zone Temperature",
         "enabled": _to_bool("MODBUS_SENSOR_HOT_ZONE_ENABLED", "true"),
         "required": True,
-        # Smart Log-04 CH1
-        "value_address": _to_int("MODBUS_ADDR_HOT_ZONE_VALUE", os.getenv("MODBUS_ADDR_HOT_ZONE", "10")),
-        "decimal_address": _to_int("MODBUS_ADDR_HOT_ZONE_DECIMAL", "11"),
-        "status_address": _to_int("MODBUS_ADDR_HOT_ZONE_STATUS", "12"),
+        # Gateway currently exposes CH1 block at 0-based 9/10/11 over Modbus TCP.
+        "value_address": _to_int("MODBUS_ADDR_HOT_ZONE_VALUE", os.getenv("MODBUS_ADDR_HOT_ZONE", "9")),
+        "decimal_address": _to_int("MODBUS_ADDR_HOT_ZONE_DECIMAL", "10"),
+        "status_address": _to_int("MODBUS_ADDR_HOT_ZONE_STATUS", "11"),
         "register_type": os.getenv("MODBUS_TYPE_HOT_ZONE", "").strip().lower(),
         "scale": float(os.getenv("MODBUS_SCALE_HOT_ZONE", "0.1")),
         "offset": float(os.getenv("MODBUS_OFFSET_HOT_ZONE", "0.0")),
@@ -76,10 +76,10 @@ SENSOR_REGISTER_MAP = {
         "label": "Cold Zone Temperature",
         "enabled": _to_bool("MODBUS_SENSOR_COLD_ZONE_ENABLED", "true"),
         "required": True,
-        # Smart Log-04 CH2
-        "value_address": _to_int("MODBUS_ADDR_COLD_ZONE_VALUE", os.getenv("MODBUS_ADDR_COLD_ZONE", "13")),
-        "decimal_address": _to_int("MODBUS_ADDR_COLD_ZONE_DECIMAL", "14"),
-        "status_address": _to_int("MODBUS_ADDR_COLD_ZONE_STATUS", "15"),
+        # CH2 block follows CH1 in gateway map.
+        "value_address": _to_int("MODBUS_ADDR_COLD_ZONE_VALUE", os.getenv("MODBUS_ADDR_COLD_ZONE", "12")),
+        "decimal_address": _to_int("MODBUS_ADDR_COLD_ZONE_DECIMAL", "13"),
+        "status_address": _to_int("MODBUS_ADDR_COLD_ZONE_STATUS", "14"),
         "register_type": os.getenv("MODBUS_TYPE_COLD_ZONE", "").strip().lower(),
         "scale": float(os.getenv("MODBUS_SCALE_COLD_ZONE", "0.1")),
         "offset": float(os.getenv("MODBUS_OFFSET_COLD_ZONE", "0.0")),
@@ -89,10 +89,10 @@ SENSOR_REGISTER_MAP = {
         "label": "Exhaust Temp",
         "enabled": _to_bool("MODBUS_SENSOR_EXHAUST_ENABLED", "true"),
         "required": True,
-        # Smart Log-04 CH3
-        "value_address": _to_int("MODBUS_ADDR_EXHAUST_VALUE", os.getenv("MODBUS_ADDR_EXHAUST", "16")),
-        "decimal_address": _to_int("MODBUS_ADDR_EXHAUST_DECIMAL", "17"),
-        "status_address": _to_int("MODBUS_ADDR_EXHAUST_STATUS", "18"),
+        # CH3 block follows CH2 in gateway map.
+        "value_address": _to_int("MODBUS_ADDR_EXHAUST_VALUE", os.getenv("MODBUS_ADDR_EXHAUST", "15")),
+        "decimal_address": _to_int("MODBUS_ADDR_EXHAUST_DECIMAL", "16"),
+        "status_address": _to_int("MODBUS_ADDR_EXHAUST_STATUS", "17"),
         "register_type": os.getenv("MODBUS_TYPE_EXHAUST", "").strip().lower(),
         "scale": float(os.getenv("MODBUS_SCALE_EXHAUST", "0.1")),
         "offset": float(os.getenv("MODBUS_OFFSET_EXHAUST", "0.0")),

@@ -534,6 +534,13 @@ def _build_vfd_profile(prefix: str, default_enabled: bool = False) -> dict:
         # MS300 control words (FWD run / stop).
         "run_forward_word": _parse_int_env(f"{prefix}_RUN_FORWARD_WORD", "0x0012"),
         "stop_word": _parse_int_env(f"{prefix}_STOP_WORD", "0x0001"),
+        # Optional readback registers for true device state reflection.
+        "status_poll_enabled": _parse_bool_with_default(f"{prefix}_STATUS_POLL_ENABLED", True),
+        "status_poll_interval_ms": max(100, int(os.getenv(f"{prefix}_STATUS_POLL_INTERVAL_MS", "400"))),
+        "operation_status_register": _parse_int_env(f"{prefix}_OPERATION_STATUS_REGISTER", "0x2101"),
+        "output_frequency_register": _parse_int_env(f"{prefix}_OUTPUT_FREQUENCY_REGISTER", "0x2103"),
+        "run_command_echo_register": _parse_int_env(f"{prefix}_RUN_COMMAND_ECHO_REGISTER", "0x2000"),
+        "speed_command_echo_register": _parse_int_env(f"{prefix}_SPEED_COMMAND_ECHO_REGISTER", "0x2001"),
         # Rate limit control writes to avoid burst toggling from UI retries.
         "min_write_interval_ms": max(50, int(os.getenv(f"{prefix}_MIN_WRITE_INTERVAL_MS", "150"))),
     }
@@ -589,6 +596,12 @@ EXPERIMENTS_MANIFEST_FLUSH_SECONDS = max(
 )
 EXPERIMENTS_MAX_HISTORY = max(1, int(os.getenv("EXPERIMENTS_MAX_HISTORY", "120")))
 EXPERIMENTS_VIDEO_ENABLED = os.getenv("EXPERIMENTS_VIDEO_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+EXPERIMENTS_VIDEO_OVERLAY_ENABLED = os.getenv("EXPERIMENTS_VIDEO_OVERLAY_ENABLED", "true").lower() in (
     "1",
     "true",
     "yes",

@@ -60,6 +60,11 @@ class SensorDataService:
             float(FLOW_METER_CONFIG.get("failure_backoff_seconds", 5.0)),
         )
         self._next_flow_attempt_ts = 0.0
+        self._temperature_hold_seconds = max(
+            0.0,
+            float(os.getenv("MODBUS_TEMPERATURE_HOLD_SECONDS", "60.0")),
+        )
+        self._last_good_temperature_values = {}
 
         if self._modbus_transport == "tcp" and not str(MODBUS_CONFIG.get("host") or "").strip():
             logger.warning("MODBUS_TRANSPORT=tcp but MODBUS_HOST is empty; sensor reads will be unavailable")
@@ -205,6 +210,28 @@ class SensorDataService:
         if len(registers) < int(count):
             return None
         return [int(v) & 0xFFFF for v in registers]
+
+    @staticmethod
+    def _read_single_register_with_retry(client, register_type: str, address: int, unit: int, attempts: int = 3):
+        total_attempts = max(1, int(attempts))
+        for idx in range(total_attempts):
+            value = SensorDataService._read_single_register(client, register_type, address, unit)
+            if value is not None:
+                return value
+            if idx < (total_attempts - 1):
+                time.sleep(0.03)
+        return None
+
+    @staticmethod
+    def _read_register_block_with_retry(client, register_type: str, address: int, count: int, unit: int, attempts: int = 3):
+        total_attempts = max(1, int(attempts))
+        for idx in range(total_attempts):
+            values = SensorDataService._read_register_block(client, register_type, address, count, unit)
+            if values is not None:
+                return values
+            if idx < (total_attempts - 1):
+                time.sleep(0.03)
+        return None
 
     @staticmethod
     def _decode_float32(registers, word_order: str = "ab", byte_order: str = "big"):
@@ -376,8 +403,6 @@ class SensorDataService:
                     address_base,
                     address_offset,
                 )
-                if required:
-                    return None
                 result[key] = None
                 result["%s_status" % key] = "misconfigured"
                 debug_rows.append(
@@ -399,62 +424,102 @@ class SensorDataService:
                 continue
 
             try:
-                raw_value = self._read_single_register(client, register_type, value_address, unit)
-                if raw_value is None:
-                    logger.warning("Modbus read failed for %s value at address %s", key, value_address)
-                    if required:
-                        self._last_modbus_cycle_debug = debug_rows
-                        return None
-                    result[key] = None
-                    result["%s_status" % key] = "unavailable"
-                    debug_rows.append(
-                        {
-                            "key": key,
-                            "register_type": register_type,
-                            "value_address": value_address,
-                            "value_raw": None,
-                            "decimal_address": decimal_address,
-                            "decimal_raw": None,
-                            "status_address": status_address,
-                            "status_raw": None,
-                            "status_text": "unavailable",
-                            "scale": None,
-                            "decoded": None,
-                            "final": None,
-                        }
-                    )
-                    continue
-
+                raw_value = None
                 decimal_pos = None
-                if decimal_address is not None:
-                    decimal_pos = self._read_single_register(client, register_type, decimal_address, unit)
-                    if decimal_pos is None:
-                        logger.warning("Modbus read failed for %s decimal position at address %s", key, decimal_address)
-                        if required:
-                            self._last_modbus_cycle_debug = debug_rows
-                            return None
-                        result[key] = None
-                        result["%s_status" % key] = "unavailable"
-                        continue
-
                 status_code = 0
-                if status_address is not None:
-                    status_raw = self._read_single_register(client, register_type, status_address, unit)
-                    if status_raw is None:
-                        logger.warning("Modbus read failed for %s status at address %s", key, status_address)
-                        if required:
-                            self._last_modbus_cycle_debug = debug_rows
-                            return None
+                status_available = False
+
+                # Prefer contiguous 3-register block reads for Smart Log channels.
+                # Example CH1 frame from user/datasheet: 01 03 00 09 00 03 CRC
+                can_block_read = (
+                    register_type == "holding"
+                    and decimal_address is not None
+                    and status_address is not None
+                    and decimal_address == (value_address + 1)
+                    and status_address == (value_address + 2)
+                )
+
+                if can_block_read:
+                    block_start = value_address - 1 if self._modbus_transport == "serial" else value_address
+                    block = self._read_register_block_with_retry(
+                        client,
+                        register_type,
+                        block_start,
+                        3,
+                        unit,
+                        attempts=3,
+                    )
+                    if block is not None and len(block) >= 3:
+                        raw_value = int(block[0])
+                        decimal_pos = int(block[1])
+                        status_code = int(block[2])
+                        status_available = True
+
+                if raw_value is None:
+                    raw_value = self._read_single_register_with_retry(
+                        client,
+                        register_type,
+                        value_address,
+                        unit,
+                        attempts=3,
+                    )
+                    if raw_value is None:
+                        logger.warning("Modbus read failed for %s value at address %s", key, value_address)
                         result[key] = None
                         result["%s_status" % key] = "unavailable"
+                        debug_rows.append(
+                            {
+                                "key": key,
+                                "register_type": register_type,
+                                "value_address": value_address,
+                                "value_raw": None,
+                                "decimal_address": decimal_address,
+                                "decimal_raw": None,
+                                "status_address": status_address,
+                                "status_raw": None,
+                                "status_text": "unavailable",
+                                "scale": None,
+                                "decoded": None,
+                                "final": None,
+                            }
+                        )
                         continue
-                    status_code = int(status_raw)
 
-                status_text = self._status_text(status_code)
+                    if decimal_address is not None:
+                        decimal_pos = self._read_single_register_with_retry(
+                            client,
+                            register_type,
+                            decimal_address,
+                            unit,
+                            attempts=3,
+                        )
+                        if decimal_pos is None:
+                            logger.warning("Modbus read failed for %s decimal position at address %s", key, decimal_address)
+                            result[key] = None
+                            result["%s_status" % key] = "unavailable"
+                            continue
+
+                    if status_address is not None:
+                        status_raw = self._read_single_register_with_retry(
+                            client,
+                            register_type,
+                            status_address,
+                            unit,
+                            attempts=3,
+                        )
+                        if status_raw is None:
+                            logger.warning("Modbus read failed for %s status at address %s", key, status_address)
+                            status_available = False
+                        else:
+                            status_code = int(status_raw)
+                            status_available = True
+
+                status_text = self._status_text(status_code) if status_available else "unknown"
                 result["%s_status" % key] = status_text
 
-                # According to Smart Log-04 map: only status=0 means valid in-range value.
-                if status_code != 0:
+                # When quality status is present and not in_range, surface null so UI does
+                # not display misleading fallback values for disconnected/fault channels.
+                if status_available and status_code != 0:
                     result[key] = None
                     debug_rows.append(
                         {
@@ -528,15 +593,110 @@ class SensorDataService:
                 )
             except Exception as e:
                 logger.warning("Modbus exception for %s: %s", key, e)
-                if required:
-                    self._last_modbus_cycle_debug = debug_rows
-                    return None
                 result[key] = None
                 result["%s_status" % key] = "unavailable"
                 continue
 
         self._last_modbus_cycle_debug = debug_rows
         return result
+
+    def _apply_temperature_hold(self, logger_data, now_ts):
+        if logger_data is None:
+            logger_data = {}
+
+        channel_specs = (
+            ("hot_zone_temperature", "hot_zone_status"),
+            ("cold_zone_temperature", "cold_zone_status"),
+            ("exhaust_temp", "exhaust_status"),
+        )
+
+        max_age = float(self._temperature_hold_seconds)
+        for value_key, status_key in channel_specs:
+            current_value = logger_data.get(value_key)
+            current_status = str(logger_data.get(status_key, "") or "").strip().lower()
+
+            if current_value is not None and current_status == "in_range":
+                self._last_good_temperature_values[value_key] = {
+                    "value": current_value,
+                    "status": "in_range",
+                    "ts": float(now_ts),
+                }
+                continue
+
+            cached = self._last_good_temperature_values.get(value_key)
+            if not cached:
+                continue
+
+            age = float(now_ts) - float(cached.get("ts", 0.0))
+            if age < 0 or age > max_age:
+                continue
+
+            # Hold last-good value for brief transient faults (including OPEN spikes)
+            # to avoid '--' flicker while process load is high.
+            logger_data[value_key] = cached.get("value")
+            if current_status in ("", "unknown", "unavailable", "sampling_in_progress", "open", "under_range", "over_range"):
+                logger_data[status_key] = "in_range"
+
+        return logger_data
+
+    def _build_temperature_cache_fallback(self, now_ts):
+        fallback = {}
+        channel_specs = (
+            ("hot_zone_temperature", "hot_zone_status"),
+            ("cold_zone_temperature", "cold_zone_status"),
+            ("exhaust_temp", "exhaust_status"),
+        )
+        max_age = float(self._temperature_hold_seconds)
+        for value_key, status_key in channel_specs:
+            cached = self._last_good_temperature_values.get(value_key)
+            if not cached:
+                continue
+            age = float(now_ts) - float(cached.get("ts", 0.0))
+            if age < 0 or age > max_age:
+                continue
+            fallback[value_key] = cached.get("value")
+            fallback[status_key] = "in_range"
+        return fallback
+
+    def _hydrate_temperatures_from_recent_history(self, sample: dict, now_ts: float):
+        max_age = float(self._temperature_hold_seconds)
+        if max_age <= 0:
+            return sample
+
+        channel_specs = (
+            ("hot_zone_temperature", "hot_zone_status"),
+            ("cold_zone_temperature", "cold_zone_status"),
+            ("exhaust_temp", "exhaust_status"),
+        )
+
+        for value_key, status_key in channel_specs:
+            if sample.get(value_key) is not None:
+                continue
+
+            fallback_value = None
+            for prev in reversed(self._history):
+                prev_value = prev.get(value_key)
+                if prev_value is None:
+                    continue
+                prev_ts = self._parse_timestamp(prev.get("timestamp"))
+                if prev_ts is None:
+                    continue
+                age = now_ts - float(prev_ts.timestamp())
+                if age < 0:
+                    continue
+                if age <= max_age:
+                    fallback_value = prev_value
+                break
+
+            if fallback_value is None:
+                continue
+
+            sample[value_key] = fallback_value
+            current_status = str(sample.get(status_key, "") or "").strip().lower()
+            if current_status in ("", "unknown", "unavailable", "open", "under_range", "over_range", "sampling_in_progress"):
+                sample[status_key] = "in_range"
+
+        return sample
 
     def _read_from_flow_meter(self):
         """Read flow_rate from separate flow meter Modbus device."""
@@ -731,7 +891,9 @@ class SensorDataService:
             if now >= self._next_modbus_attempt_ts:
                 logger_data = self._read_from_datalogger()
                 if logger_data is None:
-                    self._next_modbus_attempt_ts = now + self._modbus_failure_backoff_seconds
+                    has_cached_temperatures = bool(self._last_good_temperature_values)
+                    failure_backoff = min(self._modbus_failure_backoff_seconds, 1.0) if has_cached_temperatures else self._modbus_failure_backoff_seconds
+                    self._next_modbus_attempt_ts = now + failure_backoff
             else:
                 logger_data = None
 
@@ -742,6 +904,14 @@ class SensorDataService:
                         self._next_flow_attempt_ts = now + self._flow_failure_backoff_seconds
                 else:
                     flow_data = None
+
+            if logger_data is not None:
+                logger_data = self._apply_temperature_hold(logger_data, now)
+            else:
+                # Keep temperatures stable during short logger dropouts.
+                cached_logger = self._build_temperature_cache_fallback(now)
+                if cached_logger:
+                    logger_data = cached_logger
 
         if self._simulation_enabled:
             sample = self._fallback_sample(now)
@@ -800,6 +970,7 @@ class SensorDataService:
                 "source": "modbus_unavailable",
             }
 
+        sample = self._hydrate_temperatures_from_recent_history(sample, now)
         self._log_sensor_debug_if_needed(now, sample, self._last_modbus_cycle_debug)
 
         self._history.append(sample)
