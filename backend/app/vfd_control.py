@@ -70,10 +70,25 @@ class VFDController:
         self._last_speed_command_echo: Optional[int] = None
         default_speed_hz = float(cfg.get("default_speed_hz", 0.0))
         self._speed_hz = float(max(self._min_speed_hz, min(self._max_speed_hz, default_speed_hz)))
+        self._safety_auto_stop_enabled = bool(cfg.get("safety_auto_stop_enabled", False))
+        self._safety_auto_stop_seconds = max(5.0, float(cfg.get("safety_auto_stop_seconds", 1800.0)))
+        self._run_started_ts: Optional[float] = None
+        self._last_auto_stop_trigger_ts: Optional[float] = None
 
         if self._enabled and not MODBUS_TCP_AVAILABLE:
             self._last_error = "pymodbus_missing"
             logger.warning("VFD %s enabled but pymodbus ModbusTcpClient is unavailable", self._vfd_id)
+
+    def _sync_auto_stop_window_locked(self, now_ts: Optional[float] = None):
+        now = float(now_ts if now_ts is not None else time.time())
+        if not self._safety_auto_stop_enabled:
+            self._run_started_ts = None
+            return
+        if self._is_running:
+            if self._run_started_ts is None:
+                self._run_started_ts = now
+        else:
+            self._run_started_ts = None
 
     def _config_ready(self) -> bool:
         if not self._enabled:
@@ -196,14 +211,66 @@ class VFDController:
             if self._min_speed_hz <= speed_from_echo <= self._max_speed_hz:
                 self._speed_hz = speed_from_echo
 
+        self._sync_auto_stop_window_locked(now_ts=now)
+
     def set_run_state(self, run: bool) -> bool:
         with self._state_lock:
             word = self._run_word if bool(run) else self._stop_word
             ok = self._write_register(self._run_register, word)
             if ok:
                 self._is_running = bool(run)
+                if bool(run):
+                    self._run_started_ts = time.time()
+                else:
+                    self._run_started_ts = None
                 self._refresh_state_from_device(force=True)
             return ok
+
+    def set_safety_auto_stop(self, enabled: bool, auto_stop_seconds: float) -> Dict[str, Any]:
+        with self._state_lock:
+            seconds = max(5.0, min(24.0 * 3600.0, float(auto_stop_seconds)))
+            self._safety_auto_stop_enabled = bool(enabled)
+            self._safety_auto_stop_seconds = float(seconds)
+            self._sync_auto_stop_window_locked(now_ts=time.time())
+            return {
+                "success": True,
+                "vfd_id": self._vfd_id,
+                "safety_auto_stop_enabled": bool(self._safety_auto_stop_enabled),
+                "safety_auto_stop_seconds": float(self._safety_auto_stop_seconds),
+            }
+
+    def evaluate_auto_stop(self) -> Dict[str, Any]:
+        with self._state_lock:
+            now = time.time()
+            self._refresh_state_from_device(force=False)
+            self._sync_auto_stop_window_locked(now_ts=now)
+
+            remaining = None
+            if self._safety_auto_stop_enabled and self._run_started_ts is not None:
+                elapsed = max(0.0, now - float(self._run_started_ts))
+                remaining = max(0.0, float(self._safety_auto_stop_seconds) - elapsed)
+            if not self._safety_auto_stop_enabled or not self._is_running or self._run_started_ts is None:
+                return {
+                    "triggered": False,
+                    "stopped": False,
+                    "remaining_seconds": remaining,
+                }
+
+            if (now - float(self._run_started_ts)) < float(self._safety_auto_stop_seconds):
+                return {
+                    "triggered": False,
+                    "stopped": False,
+                    "remaining_seconds": remaining,
+                }
+
+            stopped = self.set_run_state(False)
+            if stopped:
+                self._last_auto_stop_trigger_ts = now
+            return {
+                "triggered": True,
+                "stopped": bool(stopped),
+                "remaining_seconds": 0.0,
+            }
 
     def set_speed_hz(self, speed_hz: float) -> Dict[str, Any]:
         with self._state_lock:
@@ -253,6 +320,12 @@ class VFDController:
     def get_status(self) -> Dict[str, Any]:
         with self._state_lock:
             self._refresh_state_from_device(force=False)
+            remaining_seconds = None
+            if self._safety_auto_stop_enabled and self._run_started_ts is not None and self._is_running:
+                remaining_seconds = max(
+                    0.0,
+                    float(self._safety_auto_stop_seconds) - max(0.0, time.time() - float(self._run_started_ts)),
+                )
             return {
                 "vfd_id": self._vfd_id,
                 "enabled": bool(self._enabled),
@@ -279,6 +352,15 @@ class VFDController:
                 "min_speed_hz": round(float(self._min_speed_hz), 2),
                 "max_speed_hz": round(float(self._max_speed_hz), 2),
                 "speed_scale": int(self._speed_scale),
+                "safety_auto_stop_enabled": bool(self._safety_auto_stop_enabled),
+                "safety_auto_stop_seconds": int(round(float(self._safety_auto_stop_seconds))),
+                "safety_auto_stop_remaining_seconds": (
+                    int(round(float(remaining_seconds)))
+                    if remaining_seconds is not None
+                    else None
+                ),
+                "safety_auto_stop_started_at_epoch": self._run_started_ts,
+                "safety_auto_stop_last_trigger_epoch": self._last_auto_stop_trigger_ts,
                 "last_error": self._last_error,
             }
 
@@ -345,6 +427,18 @@ def force_stop_all_vfds(reason: str = "safety") -> Dict[str, bool]:
             results[vfd_id] = bool(controller.force_stop(reason=reason))
         else:
             results[vfd_id] = True
+    return results
+
+
+def evaluate_auto_stop_all_vfds() -> Dict[str, Dict[str, Any]]:
+    results: Dict[str, Dict[str, Any]] = {}
+    for vfd_id in get_available_vfd_ids():
+        controller = get_vfd_controller(vfd_id)
+        try:
+            results[vfd_id] = controller.evaluate_auto_stop()
+        except Exception as exc:
+            logger.warning("VFD %s auto-stop evaluation error: %s", vfd_id, exc)
+            results[vfd_id] = {"triggered": False, "stopped": False, "error": str(exc)}
     return results
 
 

@@ -543,6 +543,12 @@ def _build_vfd_profile(prefix: str, default_enabled: bool = False) -> dict:
         "speed_command_echo_register": _parse_int_env(f"{prefix}_SPEED_COMMAND_ECHO_REGISTER", "0x2001"),
         # Rate limit control writes to avoid burst toggling from UI retries.
         "min_write_interval_ms": max(50, int(os.getenv(f"{prefix}_MIN_WRITE_INTERVAL_MS", "150"))),
+        # Optional per-VFD runtime auto-stop safety window (operator-controlled in UI).
+        "safety_auto_stop_enabled": _parse_bool_with_default(f"{prefix}_SAFETY_AUTO_STOP_ENABLED", False),
+        "safety_auto_stop_seconds": max(
+            5.0,
+            float(os.getenv(f"{prefix}_SAFETY_AUTO_STOP_SECONDS", "1800")),
+        ),
     }
 
 

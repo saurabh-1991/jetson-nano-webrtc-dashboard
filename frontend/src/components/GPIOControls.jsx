@@ -22,14 +22,22 @@ export const GPIOControls = () => {
   const [vfdStatuses, setVfdStatuses] = useState({})
   const [vfdRunBusy, setVfdRunBusy] = useState({})
   const [vfdSpeedBusy, setVfdSpeedBusy] = useState({})
+  const [vfdSafetyBusy, setVfdSafetyBusy] = useState({})
   const [vfdSpeedDrafts, setVfdSpeedDrafts] = useState({})
   const [vfdSpeedDirty, setVfdSpeedDirty] = useState({})
+  const [vfdAutoStopDrafts, setVfdAutoStopDrafts] = useState({})
+  const [vfdAutoStopDirty, setVfdAutoStopDirty] = useState({})
   const [error, setError] = useState(null)
   const vfdSpeedDirtyRef = useRef({})
+  const vfdAutoStopDirtyRef = useRef({})
 
   useEffect(() => {
     vfdSpeedDirtyRef.current = vfdSpeedDirty
   }, [vfdSpeedDirty])
+
+  useEffect(() => {
+    vfdAutoStopDirtyRef.current = vfdAutoStopDirty
+  }, [vfdAutoStopDirty])
 
   useEffect(() => {
     fetchControlStatus()
@@ -78,6 +86,9 @@ export const GPIOControls = () => {
         if (!vfdSpeedDirtyRef.current[vfdId]) {
           draftUpdates[vfdId] = String(vfd.speed_hz ?? 0)
         }
+        if (!vfdAutoStopDirtyRef.current[vfdId]) {
+          draftUpdates[`${vfdId}_safety`] = String(Math.max(5, Number(vfd.safety_auto_stop_seconds ?? 1800)))
+        }
       })
 
       if (Object.keys(freshStatuses).length > 0) {
@@ -85,7 +96,21 @@ export const GPIOControls = () => {
       }
 
       if (Object.keys(draftUpdates).length > 0) {
-        setVfdSpeedDrafts((prev) => ({ ...prev, ...draftUpdates }))
+        const speedUpdates = {}
+        const safetyUpdates = {}
+        Object.keys(draftUpdates).forEach((key) => {
+          if (key.endsWith('_safety')) {
+            safetyUpdates[key.replace('_safety', '')] = draftUpdates[key]
+          } else {
+            speedUpdates[key] = draftUpdates[key]
+          }
+        })
+        if (Object.keys(speedUpdates).length > 0) {
+          setVfdSpeedDrafts((prev) => ({ ...prev, ...speedUpdates }))
+        }
+        if (Object.keys(safetyUpdates).length > 0) {
+          setVfdAutoStopDrafts((prev) => ({ ...prev, ...safetyUpdates }))
+        }
       }
 
       const anyVfdSuccess = vfdResponses.some((result) => result.status === 'fulfilled')
@@ -227,6 +252,63 @@ export const GPIOControls = () => {
     setVfdSpeedDirty((prev) => ({ ...prev, [vfdId]: true }))
   }
 
+  const handleVfdSafetyTimerChange = (vfdId, event) => {
+    const raw = event.target.value
+    setVfdAutoStopDrafts((prev) => ({ ...prev, [vfdId]: raw }))
+    setVfdAutoStopDirty((prev) => ({ ...prev, [vfdId]: true }))
+  }
+
+  const applyVfdSafety = async (vfdId, enabledOverride = null) => {
+    const vfdStatus = vfdStatuses[vfdId]
+    if (!vfdStatus) {
+      return
+    }
+
+    const draftValue = vfdAutoStopDrafts[vfdId] ?? String(vfdStatus?.safety_auto_stop_seconds ?? 1800)
+    const seconds = Number(draftValue)
+    if (!Number.isFinite(seconds) || seconds < 5 || seconds > 86400) {
+      setError('Auto-stop timer must be between 5 and 86400 seconds')
+      return
+    }
+
+    const enabled = typeof enabledOverride === 'boolean'
+      ? enabledOverride
+      : !!vfdStatus?.safety_auto_stop_enabled
+
+    setVfdSafetyBusy((prev) => ({ ...prev, [vfdId]: true }))
+    setError(null)
+    try {
+      const response = await vfdAPI.setSafety(enabled, seconds, vfdId)
+      const ok = !!response?.data?.success
+      const updated = response?.data?.vfd || null
+      if (updated) {
+        setVfdStatuses((prev) => ({ ...prev, [vfdId]: updated }))
+      }
+      if (!ok) {
+        setError(`Failed to update ${vfdId.toUpperCase()} safety settings`)
+      } else {
+        setVfdAutoStopDirty((prev) => ({ ...prev, [vfdId]: false }))
+      }
+      await fetchControlStatus()
+    } catch (err) {
+      setError(`Failed to update ${vfdId.toUpperCase()} safety settings`)
+      if (!shouldThrottleClientNoise('vfd_safety_update_failed')) {
+        console.error(err)
+      }
+      await fetchControlStatus()
+    } finally {
+      setVfdSafetyBusy((prev) => ({ ...prev, [vfdId]: false }))
+    }
+  }
+
+  const handleVfdSafetyToggle = async (vfdId) => {
+    const vfdStatus = vfdStatuses[vfdId]
+    if (!vfdStatus) {
+      return
+    }
+    await applyVfdSafety(vfdId, !vfdStatus?.safety_auto_stop_enabled)
+  }
+
   return (
     <div className="gpio-controls-container">
       <h2>Controls</h2>
@@ -297,6 +379,13 @@ export const GPIOControls = () => {
           const isRunBusy = !!vfdRunBusy[vfdId]
           const isSpeedBusy = !!vfdSpeedBusy[vfdId]
           const isSpeedDirty = !!vfdSpeedDirty[vfdId]
+          const isSafetyBusy = !!vfdSafetyBusy[vfdId]
+          const autoStopEnabled = !!vfdStatus?.safety_auto_stop_enabled
+          const autoStopDraft = vfdAutoStopDrafts[vfdId] ?? String(Math.max(5, Number(vfdStatus?.safety_auto_stop_seconds ?? 1800)))
+          const autoStopSeconds = Number(autoStopDraft)
+          const hasValidAutoStopDraft = Number.isFinite(autoStopSeconds) && autoStopSeconds >= 5 && autoStopSeconds <= 86400
+          const autoStopDirty = !!vfdAutoStopDirty[vfdId]
+          const autoStopRemaining = Number(vfdStatus?.safety_auto_stop_remaining_seconds)
 
           return (
             <div className="vfd-card" key={vfdId}>
@@ -384,6 +473,56 @@ export const GPIOControls = () => {
 
                 <div className="output-subtitle">
                   Allowed range: {minVfdSpeed} - {maxVfdSpeed} Hz (MS300 command resolution via scale: {vfdSpeedScale})
+                </div>
+
+                <div className="vfd-safety-card">
+                  <div className="vfd-safety-header">
+                    <div className="vfd-speed-label">Safety Auto-Stop</div>
+                    <div className="output-actions">
+                      <span className={`state-pill ${autoStopEnabled ? 'on' : 'off'}`}>
+                        {autoStopEnabled ? 'ENABLED' : 'DISABLED'}
+                      </span>
+                      <ToggleSwitch
+                        isOn={autoStopEnabled}
+                        handleToggle={() => handleVfdSafetyToggle(vfdId)}
+                        disabled={!isVfdConfigured || isSafetyBusy}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="vfd-speed-live-row">
+                    <span className="vfd-live-chip subtle">
+                      Timer: {Math.round(Number(vfdStatus?.safety_auto_stop_seconds ?? 1800))} s
+                    </span>
+                    {autoStopEnabled && Number.isFinite(autoStopRemaining) && (
+                      <span className="vfd-live-chip subtle">
+                        Remaining: {Math.max(0, Math.round(autoStopRemaining))} s
+                      </span>
+                    )}
+                    {autoStopDirty && (
+                      <span className="vfd-live-chip subtle">Pending safety apply</span>
+                    )}
+                  </div>
+
+                  <div className="vfd-safety-input-row">
+                    <input
+                      type="number"
+                      min="5"
+                      max="86400"
+                      step="1"
+                      value={autoStopDraft}
+                      onChange={(event) => handleVfdSafetyTimerChange(vfdId, event)}
+                      disabled={!isVfdConfigured || isSafetyBusy}
+                    />
+                    <button
+                      type="button"
+                      className="vfd-apply-btn"
+                      onClick={() => applyVfdSafety(vfdId, autoStopEnabled)}
+                      disabled={!isVfdConfigured || isSafetyBusy || !hasValidAutoStopDraft}
+                    >
+                      {isSafetyBusy ? 'Applying...' : 'Apply Safety Timer'}
+                    </button>
+                  </div>
                 </div>
 
                 {!isVfdConfigured && (

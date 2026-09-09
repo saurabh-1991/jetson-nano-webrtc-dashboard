@@ -185,6 +185,12 @@ export const vfdAPI = {
   getStatus: (vfdId = 'vfd1') => api.get(`/vfd/status?vfd_id=${encodeURIComponent(vfdId)}`),
   setRun: (run, vfdId = 'vfd1') => api.post('/vfd/run', { run: !!run, vfd_id: vfdId }),
   setSpeed: (speedHz, vfdId = 'vfd1') => api.post('/vfd/speed', { speed_hz: speedHz, vfd_id: vfdId }),
+  setSafety: (autoStopEnabled, autoStopSeconds, vfdId = 'vfd1') =>
+    api.post('/vfd/safety', {
+      vfd_id: vfdId,
+      auto_stop_enabled: !!autoStopEnabled,
+      auto_stop_seconds: Number(autoStopSeconds),
+    }),
 }
 
 // System endpoints

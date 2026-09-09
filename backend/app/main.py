@@ -84,6 +84,7 @@ from .vfd_control import (
     get_all_vfd_statuses,
     get_available_vfd_ids,
     force_stop_all_vfds,
+    evaluate_auto_stop_all_vfds,
     cleanup_all_vfds,
 )
 from .sensor_data import get_sensor_data_service
@@ -252,6 +253,9 @@ h264_failure_state = {}
 CONTROL_HEARTBEAT_TIMEOUT_SECONDS = max(
     5, int(os.getenv("CONTROL_HEARTBEAT_TIMEOUT_SECONDS", "20"))
 )
+CONTROL_HEARTBEAT_FORCE_STOP_VFDS = os.getenv(
+    "CONTROL_HEARTBEAT_FORCE_STOP_VFDS", "false"
+).strip().lower() in ("1", "true", "yes", "on")
 EVENT_LOG_COMPACT_SECONDS = max(5, int(os.getenv("EVENT_LOG_COMPACT_SECONDS", "10")))
 
 last_frontend_heartbeat_ts = 0.0
@@ -1111,8 +1115,17 @@ async def safety_watchdog_loop():
             if stale_frontend and stale_control:
                 vfd_statuses = get_all_vfd_statuses()
                 vfd_was_running = any(bool(s.get("is_running")) for s in vfd_statuses.values())
-                vfd_stop_results = force_stop_all_vfds(reason="safety_watchdog_timeout") if vfd_was_running else {}
-                vfd_stopped = all(bool(ok) for ok in vfd_stop_results.values()) if vfd_was_running else True
+                vfd_stop_on_timeout = bool(CONTROL_HEARTBEAT_FORCE_STOP_VFDS)
+                vfd_stop_results = (
+                    force_stop_all_vfds(reason="safety_watchdog_timeout")
+                    if (vfd_was_running and vfd_stop_on_timeout)
+                    else {}
+                )
+                vfd_stopped = (
+                    all(bool(ok) for ok in vfd_stop_results.values())
+                    if (vfd_was_running and vfd_stop_on_timeout)
+                    else True
+                )
 
                 gpio = get_gpio_controller()
                 gpio_was_on = gpio.any_output_on()
@@ -1121,7 +1134,7 @@ async def safety_watchdog_loop():
                 else:
                     success = True
 
-                if gpio_was_on or vfd_was_running:
+                if gpio_was_on or (vfd_was_running and vfd_stop_on_timeout):
                     safety_reset_count += 1
                     event_log.log_event(
                         source="backend",
@@ -1131,17 +1144,40 @@ async def safety_watchdog_loop():
                             "success": bool(success and vfd_stopped),
                             "gpio_success": bool(success),
                             "vfd_success": bool(vfd_stopped),
+                            "vfd_stop_on_timeout": bool(vfd_stop_on_timeout),
                             "vfd_results": vfd_stop_results,
                             "timeout_seconds": CONTROL_HEARTBEAT_TIMEOUT_SECONDS,
                             "safety_reset_count": safety_reset_count,
                         },
                     )
                     logger.warning(
-                        "Safety watchdog triggered fail-safe reset. gpio_success=%s vfd_success=%s count=%s",
+                        "Safety watchdog triggered fail-safe reset. gpio_success=%s vfd_success=%s vfd_stop_on_timeout=%s count=%s",
                         success,
                         vfd_stopped,
+                        vfd_stop_on_timeout,
                         safety_reset_count,
                     )
+
+            auto_stop_results = evaluate_auto_stop_all_vfds()
+            for vfd_id, result in (auto_stop_results or {}).items():
+                if not bool(result.get("triggered")):
+                    continue
+                stopped = bool(result.get("stopped"))
+                get_event_logger().log_event(
+                    source="backend",
+                    event_type="vfd_auto_stop_timer",
+                    severity="warning" if stopped else "error",
+                    payload={
+                        "message": (
+                            f"{vfd_id} auto-stopped by safety timer"
+                            if stopped
+                            else f"{vfd_id} safety timer triggered but stop failed"
+                        ),
+                        "vfd_id": vfd_id,
+                        "result": result,
+                    },
+                )
+                logger.warning("VFD %s auto-stop timer triggered. stopped=%s result=%s", vfd_id, stopped, result)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -1413,6 +1449,7 @@ async def get_recent_events():
             else None,
             "last_control_activity_age_seconds": round(max(0.0, time.time() - last_control_activity_ts), 2),
             "watchdog_timeout_seconds": CONTROL_HEARTBEAT_TIMEOUT_SECONDS,
+            "watchdog_vfd_stop_on_timeout": bool(CONTROL_HEARTBEAT_FORCE_STOP_VFDS),
             "safety_reset_count": safety_reset_count,
         },
         "timestamp": datetime.now().isoformat(),
@@ -2703,6 +2740,64 @@ async def vfd_speed(payload: Dict[str, Any]):
 
     return {
         "success": ok,
+        "vfd_id": vfd_id,
+        "result": result,
+        "vfd": state,
+        "vfds": all_statuses,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.post("/api/vfd/safety")
+async def vfd_safety(payload: Dict[str, Any]):
+    """Set per-VFD auto-stop safety toggle + timer."""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    vfd_id = str(payload.get("vfd_id") or "vfd1").strip().lower()
+    if vfd_id not in get_available_vfd_ids():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_vfd_id",
+                "vfd_id": vfd_id,
+                "available_vfd_ids": get_available_vfd_ids(),
+            },
+        )
+
+    enabled = payload.get("auto_stop_enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="'auto_stop_enabled' must be boolean")
+
+    raw_seconds = payload.get("auto_stop_seconds")
+    try:
+        seconds = float(raw_seconds)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="'auto_stop_seconds' must be a number")
+    if seconds < 5 or seconds > 86400:
+        raise HTTPException(status_code=400, detail="'auto_stop_seconds' must be between 5 and 86400")
+
+    vfd = get_vfd_controller(vfd_id)
+    result = await run_in_threadpool(vfd.set_safety_auto_stop, bool(enabled), float(seconds))
+    state = vfd.get_status()
+    all_statuses = get_all_vfd_statuses()
+
+    get_event_logger().log_event(
+        source="backend",
+        event_type="vfd_safety_updated",
+        severity="info",
+        payload={
+            "message": f"{vfd_id} safety auto-stop {'enabled' if enabled else 'disabled'} at {int(seconds)}s",
+            "vfd_id": vfd_id,
+            "auto_stop_enabled": bool(enabled),
+            "auto_stop_seconds": int(seconds),
+            "result": result,
+            "vfd_state": state,
+        },
+    )
+
+    return {
+        "success": True,
         "vfd_id": vfd_id,
         "result": result,
         "vfd": state,
